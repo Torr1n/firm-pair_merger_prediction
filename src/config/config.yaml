@@ -1,0 +1,37 @@
+# Firm-Pair Merger Prediction Pipeline Configuration
+# Training window: 2020 patent data
+
+# --- Embedding ---
+embedding:
+  model_name: "AI-Growth-Lab/PatentSBERTa"
+  output_dim: 768
+  max_token_length: 512
+  batch_size: 256           # GPU batch size (reduce to 64 for CPU)
+  checkpoint_every_n: 100000  # Save checkpoint every N patents
+
+# --- Citation Aggregation ---
+citation_aggregation:
+  method: "mean_pooling"    # Options: mean_pooling (others TBD via ADR-002)
+  zero_citation_strategy: "zero_vector"  # Patents with no citations get 768D zero vector
+
+# --- Dimensionality Reduction ---
+umap:
+  n_components: 50
+  n_neighbors: 15
+  min_dist: 0.1
+  metric: "cosine"
+  random_state: 42
+
+# --- Data Paths ---
+data:
+  patent_metadata: "data/patent_metadata.parquet"
+  cited_abstracts: "data/cited_abstracts.parquet"
+  citation_network: "data/citation_network.parquet"
+
+# --- Output Paths ---
+output:
+  checkpoint_dir: "output/embeddings"
+  title_abstract_embeddings: "output/embeddings/title_abstract_embeddings.parquet"
+  citation_embeddings: "output/embeddings/citation_embeddings.parquet"
+  concatenated_vectors: "output/embeddings/concatenated_1536d.parquet"
+  patent_vectors_50d: "output/embeddings/patent_vectors_50d.parquet"

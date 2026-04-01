@@ -1,0 +1,28 @@
+# Core data handling
+pandas>=2.0
+pyarrow>=14.0
+numpy>=1.24
+
+# Embeddings
+sentence-transformers>=2.2
+torch>=2.0
+
+# Dimensionality reduction
+umap-learn>=0.5
+
+# Clustering (Week 2+)
+scikit-learn>=1.3
+
+# Visualization
+matplotlib>=3.7
+seaborn>=0.12
+
+# Testing
+pytest>=7.0
+pytest-cov>=4.0
+
+# Configuration
+pyyaml>=6.0
+
+# Notebooks
+jupyterlab>=4.0
