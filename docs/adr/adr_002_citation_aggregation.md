@@ -94,9 +94,11 @@ Citations whose `citation_id` has no matching abstract in `cited_abstracts.parqu
 - The 1,872,555 unique cited abstracts are embedded once and cached as a checkpoint
 - 2.92% of citation edges are skipped due to missing abstracts (97.08% coverage is sufficient)
 - No hyperparameters to tune in the aggregation step
+- **Citation embedding norms are bimodal** — a direct and expected consequence of mean pooling (see Validation below)
 
 ## Validation
 
-- Unit tests will verify: mean pooling correctness, zero-citation handling, shape (768D), edge coverage statistics
-- Phase 4 validation will compare L2 norm distributions of citation vs. title+abstract embeddings
-- Coverage bar chart will show patent counts at each pipeline stage
+- Unit tests verify: mean pooling correctness, zero-citation handling, shape (768D), edge coverage statistics (8 tests, all passing)
+- **L2 norm finding**: Citation embedding norms are bimodal. Upper peak (~6.75-6.9, n=97) corresponds to patents with 1-3 citations — when averaging few vectors that are already aligned, the mean retains near-individual norm (~6.85). Lower peak (~5.0-5.8, n=776) corresponds to patents with 4+ citations — averaging many diverse vectors causes partial cancellation, compressing the norm. Pearson r(citation_count, norm) = -0.317. This is an expected mathematical property of mean pooling, not a data quality issue. The norm effectively encodes citation coherence — a potentially useful signal for downstream portfolio analysis.
+- **Coverage validation** (1K sample): 92.5% of patents have nonzero citation embeddings (7.5% zero vectors), matching the full-dataset EDA finding of 7.6%. Edge coverage: 97.0% (matching full-dataset 97.08%).
+- Pipeline coverage bar chart confirms 100% patents retained at all stages (zero-citation patents still have valid concatenated vectors via their title+abstract component)

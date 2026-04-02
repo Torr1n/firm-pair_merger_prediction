@@ -10,6 +10,11 @@ class CitationAggregator:
         self._method = cfg["method"]
         self._zero_strategy = cfg["zero_citation_strategy"]
 
+        if self._method != "mean_pooling":
+            raise ValueError(f"Unsupported aggregation method: {self._method}")
+        if self._zero_strategy != "zero_vector":
+            raise ValueError(f"Unsupported zero-citation strategy: {self._zero_strategy}")
+
     def build_citation_lookup(
         self,
         cited_patent_ids: list[str],

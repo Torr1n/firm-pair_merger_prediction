@@ -38,13 +38,13 @@ BERT has a hard limit of 512 tokens. Our EDA (Phase 1) measured the token count 
 | Median | 152 tokens |
 | P95 | 247 tokens |
 | P99 | 322 tokens |
-| Fraction > 512 | **0.03%** (15 out of 50,000) |
+| Fraction > 512 | **0.03%** (15 out of 50,000 sample; ~360 estimated in full 1.2M dataset) |
 
-**Decision**: Use default truncation (PatentSBERTa/sentence-transformers truncates at 512 tokens automatically). The 0.03% of patents that exceed this limit lose some trailing abstract text, which is acceptable given:
+**Decision**: Use default truncation (PatentSBERTa/sentence-transformers truncates at 512 tokens automatically). The ~360 patents (0.03%) that exceed this limit lose some trailing abstract text, which is acceptable given:
 - The title (which carries the core invention description) is always preserved
 - The first ~500 tokens of the abstract contain the most information-dense content (background, summary of invention)
 - 99.97% of patents are fully captured
-- The cost of a more complex strategy (chunking, separate embeddings, hierarchical encoding) is not justified by the marginal improvement on 15 out of 50,000 patents
+- The cost of a more complex strategy (chunking, separate embeddings, hierarchical encoding) is not justified for 0.03% of patents
 
 ### Text Input: Title + Abstract concatenated as single string
 
@@ -73,12 +73,14 @@ Format: `"{title} {abstract}"` — a single space-separated string passed to `mo
 
 - Every patent in `patent_metadata.parquet` produces exactly one 768D vector
 - No patents are excluded at this stage (all 1,211,889 are embeddable)
-- The 15 patents exceeding 512 tokens lose trailing abstract text (acceptable)
+- The ~360 patents (0.03%) exceeding 512 tokens lose trailing abstract text (acceptable)
+- PatentSBERTa does NOT L2-normalize output vectors (see Validation below)
 - Downstream citation embeddings (ADR-002) use the same model for consistency
 - Embedding is deterministic given the same model weights and input text
 
 ## Validation
 
 - EDA notebook `notebooks/01_data_eda.ipynb` provides the token distribution evidence
-- Unit tests will verify output shape (768D), determinism, and null handling
-- Phase 4 validation will check L2 norm distribution and 2D UMAP structure
+- Unit tests verify output shape (768D), determinism, and null handling (38 tests, all passing)
+- **L2 norm finding**: PatentSBERTa does NOT L2-normalize embeddings. Title+abstract L2 norms: mean=6.79, std=0.14, range 6.0-7.1. This is consistent and healthy (tight distribution, no degenerate vectors). Not an issue for downstream analysis — UMAP uses cosine metric, which is scale-invariant. However, any downstream consumer that assumes unit-normalized embeddings must normalize explicitly.
+- 2D UMAP projection shows meaningful semantic structure with visible firm-level clustering tendencies

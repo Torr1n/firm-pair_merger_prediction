@@ -125,7 +125,7 @@ class PatentLoader:
     ) -> pd.DataFrame:
         """Load patent metadata with optional column selection.
 
-        Default columns if None: ['patent_id', 'gvkey', 'title', 'abstract']
+        Default columns if None: all available columns (excluding __index_level_0__)
 
         Validation:
             - File exists and is readable
@@ -146,7 +146,7 @@ class PatentLoader:
     ) -> pd.DataFrame:
         """Load cited abstracts with optional column selection.
 
-        Default columns if None: ['patent_id', 'abstract']
+        Default columns if None: all available columns (excluding __index_level_0__)
 
         Validation:
             - File exists and is readable
@@ -214,7 +214,9 @@ class PatentEncoder:
                 - batch_size: Encoding batch size (default: 256 for GPU, 64 for CPU)
                 - output_dim: Expected output dimension (768)
 
-        Loads the SentenceTransformer model on initialization.
+        Loads the SentenceTransformer model on initialization. Device selection:
+        probes CUDA with a test allocation; falls back to CPU if CUDA is
+        non-functional (e.g., GPU compute capability not supported by PyTorch build).
         """
 
     def encode_texts(
@@ -361,7 +363,6 @@ class CitationAggregator:
                 - 'total_patents': int
                 - 'zero_citation_patents': int (no citations in network)
                 - 'zero_citation_pct': float
-                - 'patents_with_partial_coverage': int (some citations missing from lookup)
                 - 'mean_citations_per_patent': float
                 - 'median_citations_per_patent': float
                 - 'total_edges': int
