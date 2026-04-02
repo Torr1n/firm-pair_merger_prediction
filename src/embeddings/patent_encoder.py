@@ -1,6 +1,7 @@
 """PatentSBERTa encoding with batching and checkpointing."""
 
 import numpy as np
+import torch
 from sentence_transformers import SentenceTransformer
 
 from src.utils.checkpointing import CheckpointManager
@@ -13,7 +14,17 @@ class PatentEncoder:
         self._batch_size = emb_cfg.get("batch_size", 64)
         self._output_dim = emb_cfg.get("output_dim", 768)
         self._checkpoint_every_n = emb_cfg.get("checkpoint_every_n", 100_000)
-        self._model = SentenceTransformer(self._model_name)
+
+        # Use GPU only if CUDA is actually functional, otherwise CPU
+        device = "cpu"
+        if torch.cuda.is_available():
+            try:
+                torch.zeros(1, device="cuda")
+                device = "cuda"
+            except Exception:
+                pass
+
+        self._model = SentenceTransformer(self._model_name, device=device)
 
     def encode_texts(
         self,

@@ -30,6 +30,7 @@ OUTPUT_DIR = "output/embeddings"
 
 def main():
     t0 = time.time()
+    Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
     config = load_config()
 
     # Override batch size for CPU
