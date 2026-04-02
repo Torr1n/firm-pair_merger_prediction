@@ -8,15 +8,17 @@
 
 ## What Was Built
 
-A complete patent vectorization pipeline with 5 modules, 38 passing unit tests, and checkpoint-driven architecture:
+A complete patent vectorization pipeline with 5 modules, 41 passing unit tests, and checkpoint-driven architecture:
 
 | Module | Purpose | Tests |
 |--------|---------|-------|
 | `CheckpointManager` | Binary parquet save/load with metadata | 7 |
 | `PatentLoader` | Column-selective parquet loading with validation | 9 |
-| `PatentEncoder` | PatentSBERTa encoding with batching and checkpointing | 9 |
+| `PatentEncoder` | PatentSBERTa encoding with batching and checkpointing | 12* |
 | `CitationAggregator` | Mean-pooled citation embeddings, zero-citation handling | 8 |
 | `UMAPReducer` | 1536D → 50D dimensionality reduction | 5 |
+
+*PatentEncoder tests require the cached PatentSBERTa model. In offline environments, these 12 tests are skipped (29 pass, 12 skip). This is by design — see `pytestmark` in `tests/unit/test_patent_encoder.py`.
 
 Plus: EDA notebook (8 data quality questions answered), validation notebook with 3 visualizations (all checks passed), 2 ADRs, 1 interface spec, validation pipeline script.
 
@@ -54,14 +56,14 @@ Plus: EDA notebook (8 data quality questions answered), validation notebook with
 - **Full-scale pipeline execution**: 1K-sample pipeline validated end-to-end (13.4 min on CPU). Full 1.2M-patent run requires more compute (desktop with proper GPU or AWS).
 - **PatentSBERTa vs general-model comparison**: Bootstrap prompt suggested this; deferred as the domain-specific model is well-justified by literature.
 - **UMAP hyperparameter tuning**: Baseline defaults only. Tuning deferred to after full-scale run produces real embeddings.
-- **Codex review**: ADRs and spec written but not yet reviewed by Codex. Torrin approved proceeding to implementation before formal audit.
+- **Codex review**: ADRs and spec were not reviewed before implementation (Torrin approved proceeding). Codex retroactively reviewed the full sprint, found a critical resume-corruption bug and a checkpoint no-op — both fixed. Week 1 approved with two minor notes (see `docs/epics/week1_patent_vectorization/codex_review_response.md`).
 
 ## Confidence Levels
 
 | Component | Confidence | Notes |
 |-----------|-----------|-------|
 | Data quality | **High** | Thoroughly validated in EDA |
-| Module correctness | **High** | 38 tests, all passing; 1K sample pipeline validated end-to-end |
+| Module correctness | **High** | 41 tests (29 offline-safe + 12 model-dependent), all passing; 1K sample pipeline validated end-to-end; Codex-identified resume bug fixed |
 | Embedding quality | **High** | L2 norms consistent, UMAP shows meaningful structure, coverage matches EDA |
 | Full-scale feasibility | **Medium** | Untested at 1.2M scale; memory and I/O are open questions |
 | UMAP quality at scale | **Medium** | 1.2M × 1536 is ~7GB input; may need subsampling fallback |

@@ -158,10 +158,20 @@ class TestCheckpointing:
                 checkpoint_manager=cm, checkpoint_path=path,
             )
 
-    def test_intermediate_checkpoints_saved(self, encoder, tmp_path):
-        """With checkpoint_every_n=4 and 10 patents, intermediate saves happen."""
+    def test_intermediate_checkpoints_saved(self, encoder, tmp_path, monkeypatch):
+        """With checkpoint_every_n=4 and 10 patents, save_embeddings is called
+        3 times (chunks of 4, 4, 2) — not once at the end."""
         cm = CheckpointManager(str(tmp_path))
         path = str(tmp_path / "intermediate_test.parquet")
+
+        save_calls = []
+        original_save = cm.save_embeddings
+
+        def tracking_save(*args, **kwargs):
+            save_calls.append(len(args[0]))  # track patent count per save
+            return original_save(*args, **kwargs)
+
+        monkeypatch.setattr(cm, "save_embeddings", tracking_save)
 
         ids = [f"p{i}" for i in range(10)]
         titles = [f"Title {i}" for i in range(10)]
@@ -172,7 +182,11 @@ class TestCheckpointing:
             checkpoint_manager=cm, checkpoint_path=path, checkpoint_every_n=4,
         )
 
-        # Checkpoint should exist with all 10 patents
+        # Should have saved 3 times: after 4, 8, and 10 patents
+        assert len(save_calls) == 3
+        assert save_calls == [4, 8, 10]
+
+        # Final checkpoint has all 10
         loaded_ids, loaded_emb, _ = cm.load_embeddings(path)
         assert len(loaded_ids) == 10
         assert loaded_emb.shape == (10, 768)
