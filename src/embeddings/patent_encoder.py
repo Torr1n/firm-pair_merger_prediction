@@ -61,14 +61,6 @@ class PatentEncoder:
 
         every_n = checkpoint_every_n or self._checkpoint_every_n
 
-        # Check for existing checkpoint to resume from
-        start_idx = 0
-        existing_ids = []
-        existing_emb = None
-        if checkpoint_manager and checkpoint_path and checkpoint_manager.checkpoint_exists(checkpoint_path):
-            existing_ids, existing_emb, _ = checkpoint_manager.load_embeddings(checkpoint_path)
-            start_idx = len(existing_ids)
-
         # Prepare texts: "{title} {abstract}" or title-only for null/empty abstracts
         texts = []
         for title, abstract in zip(titles, abstracts):
@@ -80,26 +72,48 @@ class PatentEncoder:
             else:
                 texts.append(t)
 
-        # Encode remaining patents in chunks
+        # Resume from checkpoint if available
+        start_idx = 0
+        chunks = []
+        if checkpoint_manager and checkpoint_path and checkpoint_manager.checkpoint_exists(checkpoint_path):
+            existing_ids, existing_emb, _ = checkpoint_manager.load_embeddings(checkpoint_path)
+            # Verify ID prefix matches to prevent silent misalignment
+            expected_prefix = patent_ids[:len(existing_ids)]
+            if existing_ids != expected_prefix:
+                raise ValueError(
+                    f"Checkpoint ID mismatch: checkpoint contains {len(existing_ids)} "
+                    f"patents starting with {existing_ids[:3]}, but current workload "
+                    f"starts with {expected_prefix[:3]}. Cannot safely resume — delete "
+                    f"the checkpoint file to restart from scratch."
+                )
+            start_idx = len(existing_ids)
+            chunks.append(existing_emb)
+            print(f"  Resuming from checkpoint: {start_idx:,} patents already encoded")
+
+        # Encode remaining patents in chunks of every_n
         remaining_texts = texts[start_idx:]
-        if remaining_texts:
-            new_embeddings = self.encode_texts(remaining_texts, show_progress=True)
-        else:
-            new_embeddings = np.empty((0, self._output_dim), dtype=np.float32)
+        for chunk_start in range(0, len(remaining_texts), every_n):
+            chunk_end = min(chunk_start + every_n, len(remaining_texts))
+            chunk_texts = remaining_texts[chunk_start:chunk_end]
 
-        # Combine with existing checkpoint
-        if existing_emb is not None and len(existing_emb) > 0:
-            all_embeddings = np.concatenate([existing_emb, new_embeddings], axis=0)
-        else:
-            all_embeddings = new_embeddings
+            chunk_emb = self.encode_texts(chunk_texts, show_progress=True)
+            chunks.append(chunk_emb)
 
-        # Save final checkpoint
-        if checkpoint_manager and checkpoint_path:
-            checkpoint_manager.save_embeddings(
-                patent_ids,
-                all_embeddings,
-                checkpoint_path,
-                metadata={"model_name": self._model_name},
-            )
+            # Save intermediate checkpoint
+            if checkpoint_manager and checkpoint_path:
+                progress_idx = start_idx + chunk_end
+                all_so_far = np.concatenate(chunks, axis=0)
+                checkpoint_manager.save_embeddings(
+                    patent_ids[:progress_idx],
+                    all_so_far,
+                    checkpoint_path,
+                    metadata={"model_name": self._model_name},
+                )
+                print(f"  Checkpoint saved: {progress_idx:,}/{len(patent_ids):,} patents")
+
+        if chunks:
+            all_embeddings = np.concatenate(chunks, axis=0)
+        else:
+            all_embeddings = np.empty((0, self._output_dim), dtype=np.float32)
 
         return patent_ids, all_embeddings

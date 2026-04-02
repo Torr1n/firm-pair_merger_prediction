@@ -190,7 +190,7 @@ class PatentLoader:
 
 ### Constraints
 
-- Column-selective reads by default (memory safety)
+- When `columns=None`, loads all available columns (excluding artifacts). Callers should pass explicit column lists for memory-sensitive paths (e.g., full-scale encoding).
 - `__index_level_0__` column is always excluded from loads (pandas artifact)
 - All validation happens at load time, not lazily
 

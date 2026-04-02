@@ -1,15 +1,19 @@
-"""Tests for PatentEncoder — PatentSBERTa encoding with batching and checkpointing."""
+"""Tests for PatentEncoder — PatentSBERTa encoding with batching and checkpointing.
+
+These tests load the real PatentSBERTa model (not mocked) and require network
+access on first run to download model weights. Subsequent runs use the HF cache.
+If the model is unavailable, all tests in this module are skipped.
+"""
 
 import numpy as np
 import pytest
 
-from src.embeddings.patent_encoder import PatentEncoder
 from src.utils.checkpointing import CheckpointManager
 
+try:
+    from src.embeddings.patent_encoder import PatentEncoder
 
-@pytest.fixture(scope="module")
-def config():
-    return {
+    _CONFIG = {
         "embedding": {
             "model_name": "AI-Growth-Lab/PatentSBERTa",
             "output_dim": 768,
@@ -17,12 +21,27 @@ def config():
             "checkpoint_every_n": 5,
         }
     }
+    _ENCODER = PatentEncoder(_CONFIG)
+    _MODEL_AVAILABLE = True
+except Exception:
+    _MODEL_AVAILABLE = False
+    _CONFIG = None
+    _ENCODER = None
+
+pytestmark = pytest.mark.skipif(
+    not _MODEL_AVAILABLE,
+    reason="PatentSBERTa model not available (offline or not cached)",
+)
 
 
-@pytest.fixture(scope="module")
-def encoder(config):
-    """Load model once for all tests in this module (expensive)."""
-    return PatentEncoder(config)
+@pytest.fixture
+def config():
+    return _CONFIG
+
+
+@pytest.fixture
+def encoder():
+    return _ENCODER
 
 
 class TestEncodeTexts:
@@ -77,7 +96,9 @@ class TestEncodePatents:
         with pytest.raises(ValueError):
             encoder.encode_patents(["p1"], ["t1", "t2"], ["a1"])
 
-    def test_checkpointing(self, encoder, tmp_path):
+
+class TestCheckpointing:
+    def test_checkpoint_saved(self, encoder, tmp_path):
         cm = CheckpointManager(str(tmp_path))
         path = str(tmp_path / "test_checkpoint.parquet")
 
@@ -94,5 +115,64 @@ class TestEncodePatents:
 
         assert result_ids == ids
         assert result_emb.shape == (10, 768)
-        # Final checkpoint should exist
         assert cm.checkpoint_exists(path)
+
+    def test_resume_produces_same_result(self, encoder, tmp_path):
+        """Encode, then re-call with same IDs — should resume from checkpoint."""
+        cm = CheckpointManager(str(tmp_path))
+        path = str(tmp_path / "resume_test.parquet")
+
+        ids = [f"p{i}" for i in range(8)]
+        titles = [f"Title {i}" for i in range(8)]
+        abstracts = [f"Abstract {i}" for i in range(8)]
+
+        # First run
+        _, emb1 = encoder.encode_patents(
+            ids, titles, abstracts,
+            checkpoint_manager=cm, checkpoint_path=path, checkpoint_every_n=4,
+        )
+
+        # Second run — should resume from checkpoint, produce identical output
+        _, emb2 = encoder.encode_patents(
+            ids, titles, abstracts,
+            checkpoint_manager=cm, checkpoint_path=path, checkpoint_every_n=4,
+        )
+
+        np.testing.assert_array_equal(emb1, emb2)
+
+    def test_resume_with_mismatched_ids_raises(self, encoder, tmp_path):
+        """If checkpoint IDs don't match the current workload prefix, raise."""
+        cm = CheckpointManager(str(tmp_path))
+        path = str(tmp_path / "mismatch_test.parquet")
+
+        # First run with IDs [a, b, c]
+        encoder.encode_patents(
+            ["a", "b", "c"], ["T1", "T2", "T3"], ["A1", "A2", "A3"],
+            checkpoint_manager=cm, checkpoint_path=path, checkpoint_every_n=10,
+        )
+
+        # Second run with different ID order — should raise
+        with pytest.raises(ValueError, match="mismatch"):
+            encoder.encode_patents(
+                ["x", "y", "z", "w"], ["T1", "T2", "T3", "T4"], ["A1", "A2", "A3", "A4"],
+                checkpoint_manager=cm, checkpoint_path=path,
+            )
+
+    def test_intermediate_checkpoints_saved(self, encoder, tmp_path):
+        """With checkpoint_every_n=4 and 10 patents, intermediate saves happen."""
+        cm = CheckpointManager(str(tmp_path))
+        path = str(tmp_path / "intermediate_test.parquet")
+
+        ids = [f"p{i}" for i in range(10)]
+        titles = [f"Title {i}" for i in range(10)]
+        abstracts = [f"Abstract {i}" for i in range(10)]
+
+        encoder.encode_patents(
+            ids, titles, abstracts,
+            checkpoint_manager=cm, checkpoint_path=path, checkpoint_every_n=4,
+        )
+
+        # Checkpoint should exist with all 10 patents
+        loaded_ids, loaded_emb, _ = cm.load_embeddings(path)
+        assert len(loaded_ids) == 10
+        assert loaded_emb.shape == (10, 768)
