@@ -1,5 +1,6 @@
 """Parquet loading with validation for patent data files."""
 
+import warnings
 from pathlib import Path
 
 import pandas as pd
@@ -51,8 +52,17 @@ class PatentLoader:
 
         if df["patent_id"].isna().any():
             raise ValueError("patent_metadata contains null patent_ids")
-        if df["patent_id"].duplicated().any():
-            raise ValueError("patent_metadata contains duplicate patent_ids")
+
+        n_dupes = df["patent_id"].duplicated().sum()
+        if n_dupes > 0:
+            # v2 data has multi-firm patents (same patent linked to multiple gvkeys).
+            # Warn rather than reject — callers decide dedup strategy.
+            warnings.warn(
+                f"patent_metadata contains {n_dupes:,} duplicate patent_ids "
+                f"(likely multi-firm patents). Callers should deduplicate "
+                f"before embedding if unique patent vectors are required.",
+                stacklevel=2,
+            )
 
         # Return only the requested columns
         if columns is not None:

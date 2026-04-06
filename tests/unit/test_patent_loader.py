@@ -65,7 +65,7 @@ class TestLoadPatentMetadata:
         df = loader.load_patent_metadata(columns=["patent_id", "title"])
         assert set(df.columns) == {"patent_id", "title"}
 
-    def test_validates_no_duplicate_patent_ids(self, tmp_path):
+    def test_warns_on_duplicate_patent_ids(self, tmp_path):
         pm = pa.table({
             "patent_id": ["p1", "p1", "p2"],
             "title": ["A", "B", "C"],
@@ -78,8 +78,9 @@ class TestLoadPatentMetadata:
             "citation_network": "dummy",
         }}
         loader = PatentLoader(config)
-        with pytest.raises(ValueError, match="duplicate"):
-            loader.load_patent_metadata()
+        with pytest.warns(UserWarning, match="duplicate"):
+            df = loader.load_patent_metadata()
+        assert len(df) == 3  # all rows returned, caller decides dedup
 
     def test_missing_file_raises(self, tmp_path):
         config = {"data": {

@@ -22,11 +22,11 @@ umap:
   metric: "cosine"
   random_state: 42
 
-# --- Data Paths ---
+# --- Data Paths (v2: tech + biotech, expanded private firm coverage) ---
 data:
-  patent_metadata: "data/patent_metadata.parquet"
-  cited_abstracts: "data/cited_abstracts.parquet"
-  citation_network: "data/citation_network.parquet"
+  patent_metadata: "data/firm_patents_text_metadata_v2.parquet"
+  cited_abstracts: "data/cited_abstracts_v2.parquet"
+  citation_network: "data/citation_network_v2.parquet"
 
 # --- Output Paths ---
 output:
