@@ -6,8 +6,11 @@
 # Usage:
 #   cd infrastructure
 #   terraform init
-#   terraform plan -var="key_name=your-ssh-key" -var="ssh_cidr=YOUR.IP.HERE/32"
-#   terraform apply -var="key_name=your-ssh-key" -var="ssh_cidr=YOUR.IP.HERE/32"
+#   terraform plan -var="key_name=dev-environment-key" -var="ssh_cidr=$(curl -s ifconfig.me)/32"
+#   terraform apply -var="key_name=dev-environment-key" -var="ssh_cidr=$(curl -s ifconfig.me)/32"
+#
+# S3 access: After SSH-ing in, run `aws configure --profile torrin` with your
+# existing credentials. The bootstrap script pulls data using this profile.
 
 terraform {
   required_version = ">= 1.0"
@@ -37,7 +40,7 @@ variable "key_name" {
 }
 
 variable "ssh_cidr" {
-  description = "CIDR block for SSH access (e.g., 'YOUR.IP.HERE/32'). Use 'curl ifconfig.me' to find your IP."
+  description = "CIDR block for SSH access (e.g., 'YOUR.IP.HERE/32'). Use 'curl -s ifconfig.me' to find your IP."
   type        = string
 }
 
@@ -116,76 +119,18 @@ resource "aws_security_group" "pipeline" {
   }
 }
 
-# --- IAM Role for EC2 (S3 access, scoped to project prefix) ---
-
-resource "aws_iam_role" "pipeline" {
-  name = "firm-pair-merger-pipeline-role"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Action = "sts:AssumeRole"
-      Effect = "Allow"
-      Principal = {
-        Service = "ec2.amazonaws.com"
-      }
-    }]
-  })
-
-  tags = {
-    Project = "firm-pair-merger-prediction"
-  }
-}
-
-resource "aws_iam_role_policy" "s3_access" {
-  name = "firm-pair-merger-s3-access"
-  role = aws_iam_role.pipeline.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "ListBucketUnderPrefix"
-        Effect = "Allow"
-        Action = "s3:ListBucket"
-        Resource = "arn:aws:s3:::${var.s3_bucket}"
-        Condition = {
-          StringLike = {
-            "s3:prefix" = ["${var.s3_prefix}/*"]
-          }
-        }
-      },
-      {
-        Sid    = "ReadWriteProjectObjects"
-        Effect = "Allow"
-        Action = [
-          "s3:GetObject",
-          "s3:PutObject"
-        ]
-        Resource = "arn:aws:s3:::${var.s3_bucket}/${var.s3_prefix}/*"
-      }
-    ]
-  })
-}
-
-resource "aws_iam_instance_profile" "pipeline" {
-  name = "firm-pair-merger-pipeline-profile"
-  role = aws_iam_role.pipeline.name
-}
-
 # --- EC2 Instance ---
-# g5 instances have NVMe instance store but it must be explicitly mounted.
-# We use a large root EBS volume instead for simplicity and persistence.
+# No IAM instance profile — S3 access uses Torrin's existing AWS credentials
+# configured via `aws configure --profile torrin` after SSH.
 
 resource "aws_instance" "pipeline" {
   ami                    = data.aws_ami.deep_learning.id
   instance_type          = var.instance_type
   key_name               = var.key_name
   vpc_security_group_ids = [aws_security_group.pipeline.id]
-  iam_instance_profile   = aws_iam_instance_profile.pipeline.name
 
   root_block_device {
-    volume_size = 200  # GB — enough for data (~5GB), checkpoints (~50GB), model cache
+    volume_size = 200
     volume_type = "gp3"
   }
 
@@ -218,6 +163,6 @@ output "ami_name" {
   value = data.aws_ami.deep_learning.name
 }
 
-output "estimated_cost_per_hour" {
-  value = "~$2.45/hr (g5.8xlarge on-demand, us-west-2)"
+output "post_ssh_setup" {
+  value = "After SSH: aws configure --profile torrin (enter your access key/secret), then run the pipeline"
 }

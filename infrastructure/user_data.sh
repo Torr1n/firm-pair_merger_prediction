@@ -2,13 +2,8 @@
 # Bootstrap script for the patent vectorization pipeline EC2 instance.
 # Runs as root via EC2 user-data on first boot.
 #
-# This script:
-#   1. Installs project Python dependencies
-#   2. Pulls data from S3
-#   3. Clones the project repo
-#
-# The pipeline itself is run manually via SSH (not automated) so we can
-# monitor progress and catch issues before they burn compute hours.
+# This script installs project dependencies and clones the repo.
+# S3 data pull happens manually after SSH (requires aws configure).
 
 set -euo pipefail
 
@@ -35,22 +30,17 @@ cd firm-pair_merger_prediction
 sudo -u ubuntu python3 -m venv venv
 sudo -u ubuntu bash -c "source venv/bin/activate && pip install --quiet -r requirements.txt"
 
-# --- Pull data from S3 ---
+# Create data and output directories
 sudo -u ubuntu mkdir -p data output/embeddings
 
-echo "Pulling data from s3://$S3_BUCKET/$S3_PREFIX/data/v2/ ..."
-sudo -u ubuntu aws s3 cp "s3://$S3_BUCKET/$S3_PREFIX/data/v2/" data/ --recursive
-
-# --- Verify ---
 echo ""
 echo "=== Bootstrap complete at $(date -u) ==="
-echo "Files in data/:"
-ls -lh data/
-
 echo ""
 echo "=== Next steps ==="
 echo "1. SSH in:  ssh -i ~/.ssh/KEY.pem ubuntu@<public-ip>"
-echo "2. cd firm-pair_merger_prediction"
-echo "3. source venv/bin/activate"
-echo "4. python scripts/run_full_pipeline.py 2>&1 | tee output/pipeline.log"
-echo "5. After completion: aws s3 sync output/ s3://$S3_BUCKET/$S3_PREFIX/output/"
+echo "2. aws configure --profile torrin"
+echo "3. cd firm-pair_merger_prediction"
+echo "4. aws s3 cp s3://$S3_BUCKET/$S3_PREFIX/data/v2/ data/ --recursive --profile torrin"
+echo "5. source venv/bin/activate"
+echo "6. python scripts/run_full_pipeline.py 2>&1 | tee output/pipeline.log"
+echo "7. aws s3 sync output/ s3://$S3_BUCKET/$S3_PREFIX/output/ --profile torrin"
