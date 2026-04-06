@@ -65,7 +65,7 @@ Expected — biotech patents cite prior art outside the dataset's scope. Mean po
 ### 1. Terraform Configuration (`infrastructure/main.tf`)
 
 Review for:
-- **IAM scope**: The policy grants `s3:GetObject`, `s3:PutObject`, `s3:ListBucket` on `ubc-torren/firm-pair-merger/*` only. Verify this is correctly scoped and doesn't grant access to Torrin's existing `financial-topic-modeling/` namespace.
+- **IAM scope**: The policy grants `s3:GetObject`, `s3:PutObject`, `s3:ListBucket` on `ubc-torrin/firm-pair-merger/*` only. Verify this is correctly scoped and doesn't grant access to Torrin's existing `financial-topic-modeling/` namespace.
 - **Security group**: SSH from `0.0.0.0/0` — is this acceptable for a short-lived instance, or should we restrict to Torrin's IP?
 - **AMI selection**: We're using `Deep Learning OSS Nvidia Driver AMI GPU PyTorch *Ubuntu 22.04*` via data source. Verify the filter is specific enough to get a stable, working AMI.
 - **Instance type**: g5.8xlarge (A10G, 128GB RAM, $2.45/hr). ADR-003 documents the sizing rationale.
@@ -92,7 +92,7 @@ Torrin has IAM access to Jan Bena's AWS account via cloud administrator David. E
 - Can Torrin's IAM user/role create IAM roles and instance profiles? (Terraform needs this)
 - Can Torrin's IAM user/role create security groups?
 - Is there a service quota for g5 instances in the account's region?
-- Is the `ubc-torren` S3 bucket accessible and does the prefix `firm-pair-merger/` not conflict with anything?
+- Is the `ubc-torrin` S3 bucket accessible and does the prefix `firm-pair-merger/` not conflict with anything?
 
 If Torrin lacks these permissions, we need to request them from David. Draft the minimal permission set needed.
 
@@ -101,10 +101,10 @@ If Torrin lacks these permissions, we need to request them from David. Draft the
 ## Deployment Plan
 
 1. **Pre-flight** (Codex reviews Terraform + scripts, verifies permissions)
-2. **Upload data to S3**: `aws s3 sync data/ s3://ubc-torren/firm-pair-merger/data/v2/`
+2. **Upload data to S3**: `aws s3 sync data/ s3://ubc-torrin/firm-pair-merger/data/v2/`
 3. **Deploy**: `cd infrastructure && terraform init && terraform apply -var="key_name=torrin-key"`
 4. **SSH in, run pipeline**: monitor via `tee output/pipeline.log`
-5. **Push results to S3**: `aws s3 sync output/ s3://ubc-torren/firm-pair-merger/output/`
+5. **Push results to S3**: `aws s3 sync output/ s3://ubc-torrin/firm-pair-merger/output/`
 6. **Terminate instance**: `terraform destroy`
 
 ### Codex's Role During the Run

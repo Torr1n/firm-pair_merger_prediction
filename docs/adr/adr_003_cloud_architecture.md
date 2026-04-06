@@ -13,25 +13,25 @@ Torrin has access to Jan Bena's AWS account through cloud administrator David. T
 
 ### Workload Characteristics
 
-| Stage | Compute | Memory | Duration (est.) |
-|-------|---------|--------|-----------------|
-| PatentSBERTa encoding (2.57M texts) | GPU (batch inference) | ~4-6 GB | ~20-30 min |
-| PatentSBERTa encoding (3.79M cited abstracts) | GPU (batch inference) | ~4-6 GB | ~25-40 min |
-| Citation aggregation | CPU (dict lookup + mean pool) | ~12 GB (lookup table) | ~10-20 min |
-| UMAP (2.57M × 1536 → 50D) | CPU (memory-bound) | **~60-80 GB** | ~1.5-3 hr |
-| **Total** | | **Peak ~80 GB** | **~2.5-4.5 hr** |
+| Stage                                         | Compute                       | Memory                | Duration (est.) |
+| --------------------------------------------- | ----------------------------- | --------------------- | --------------- |
+| PatentSBERTa encoding (2.57M texts)           | GPU (batch inference)         | ~4-6 GB               | ~20-30 min      |
+| PatentSBERTa encoding (3.79M cited abstracts) | GPU (batch inference)         | ~4-6 GB               | ~25-40 min      |
+| Citation aggregation                          | CPU (dict lookup + mean pool) | ~12 GB (lookup table) | ~10-20 min      |
+| UMAP (2.57M × 1536 → 50D)                     | CPU (memory-bound)            | **~60-80 GB**         | ~1.5-3 hr       |
+| **Total**                                     |                               | **Peak ~80 GB**       | **~2.5-4.5 hr** |
 
 ## Decision
 
 ### Instance: g5.8xlarge (on-demand)
 
-| Spec | Value |
-|------|-------|
-| GPU | 1x NVIDIA A10G (24 GB VRAM) |
-| vCPUs | 32 |
-| RAM | 128 GB |
-| Storage | 900 GB NVMe |
-| On-demand price | ~$2.45/hr (us-west-2) |
+| Spec            | Value                       |
+| --------------- | --------------------------- |
+| GPU             | 1x NVIDIA A10G (24 GB VRAM) |
+| vCPUs           | 32                          |
+| RAM             | 128 GB                      |
+| Storage         | 900 GB NVMe                 |
+| On-demand price | ~$2.45/hr (us-west-2)       |
 
 **Why g5.8xlarge over alternatives:**
 
@@ -44,10 +44,10 @@ Torrin has access to Jan Bena's AWS account through cloud administrator David. T
 - Pipeline runs once, takes 3-5 hours. Spot interruption would lose progress (even with checkpointing, UMAP can't checkpoint mid-fit).
 - Cost difference is ~$3-5 total. Not worth the operational risk for a one-time run.
 
-### Storage: S3 bucket `ubc-torren` with namespace isolation
+### Storage: S3 bucket `ubc-torrin` with namespace isolation
 
 ```
-s3://ubc-torren/
+s3://ubc-torrin/
 ├── financial-topic-modeling/    # Existing earnings call work (DO NOT TOUCH)
 └── firm-pair-merger/            # This project
     ├── data/v2/                 # Input parquet files
@@ -57,7 +57,7 @@ s3://ubc-torren/
 
 **Why reuse existing bucket:**
 
-- Torrin already has IAM access to `ubc-torren`
+- Torrin already has IAM access to `ubc-torrin`
 - Prefix-based isolation is standard S3 practice
 - No cross-project interference — different prefixes, no shared state
 
@@ -77,21 +77,21 @@ No orchestration (Step Functions, Batch) needed — this is a single sequential 
 
 ## Alternatives Considered
 
-| Alternative | Why Rejected |
-|-------------|-------------|
-| AWS Batch | Adds orchestration complexity for a single-machine job. Good for the earnings call pipeline (many parallel jobs), overkill here. |
-| SageMaker Processing | Higher cost, vendor lock-in on job format, unnecessary abstractions. |
-| Spot instance | Risk of interruption during UMAP (non-checkpointable). Net savings ~$3-5. |
-| Multi-instance (encode on GPU, UMAP on high-memory CPU) | Added data transfer complexity. Single g5.8xlarge handles both. |
-| Lambda / serverless | UMAP needs 80+ GB RAM and hours of runtime. Not serverless-shaped. |
+| Alternative                                             | Why Rejected                                                                                                                     |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| AWS Batch                                               | Adds orchestration complexity for a single-machine job. Good for the earnings call pipeline (many parallel jobs), overkill here. |
+| SageMaker Processing                                    | Higher cost, vendor lock-in on job format, unnecessary abstractions.                                                             |
+| Spot instance                                           | Risk of interruption during UMAP (non-checkpointable). Net savings ~$3-5.                                                        |
+| Multi-instance (encode on GPU, UMAP on high-memory CPU) | Added data transfer complexity. Single g5.8xlarge handles both.                                                                  |
+| Lambda / serverless                                     | UMAP needs 80+ GB RAM and hours of runtime. Not serverless-shaped.                                                               |
 
 ## Cost Estimate
 
-| Scenario | Hours | Instance Cost | S3 Storage/mo | Total |
-|----------|-------|--------------|---------------|-------|
-| Optimistic | 2.5 hr | $6.12 | ~$0.50 | **~$7** |
-| Expected | 3.5 hr | $8.57 | ~$0.50 | **~$9** |
-| Pessimistic | 6 hr | $14.69 | ~$0.50 | **~$15** |
+| Scenario    | Hours  | Instance Cost | S3 Storage/mo | Total    |
+| ----------- | ------ | ------------- | ------------- | -------- |
+| Optimistic  | 2.5 hr | $6.12         | ~$0.50        | **~$7**  |
+| Expected    | 3.5 hr | $8.57         | ~$0.50        | **~$9**  |
+| Pessimistic | 6 hr   | $14.69        | ~$0.50        | **~$15** |
 
 ## Consequences
 

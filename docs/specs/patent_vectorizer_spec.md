@@ -131,10 +131,12 @@ class PatentLoader:
             - File exists and is readable
             - Required columns are present: patent_id, title, abstract
             - patent_id has no nulls
-            - patent_id has no duplicates
+            - Warns (UserWarning) if patent_id has duplicates. v2 data contains
+              multi-firm patents (same patent linked to multiple gvkeys). Callers
+              must deduplicate before encoding if unique patent vectors are required.
 
         Returns:
-            DataFrame with requested columns.
+            DataFrame with requested columns (including any duplicates).
 
         Raises:
             FileNotFoundError: If parquet file doesn't exist.

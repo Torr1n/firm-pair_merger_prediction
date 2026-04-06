@@ -6,8 +6,8 @@
 # Usage:
 #   cd infrastructure
 #   terraform init
-#   terraform plan -var="key_name=your-ssh-key"
-#   terraform apply -var="key_name=your-ssh-key"
+#   terraform plan -var="key_name=your-ssh-key" -var="ssh_cidr=YOUR.IP.HERE/32"
+#   terraform apply -var="key_name=your-ssh-key" -var="ssh_cidr=YOUR.IP.HERE/32"
 
 terraform {
   required_version = ">= 1.0"
@@ -36,10 +36,15 @@ variable "key_name" {
   type        = string
 }
 
+variable "ssh_cidr" {
+  description = "CIDR block for SSH access (e.g., 'YOUR.IP.HERE/32'). Use 'curl ifconfig.me' to find your IP."
+  type        = string
+}
+
 variable "s3_bucket" {
   description = "Existing S3 bucket for data and results"
   type        = string
-  default     = "ubc-torren"
+  default     = "ubc-torrin"
 }
 
 variable "s3_prefix" {
@@ -90,11 +95,11 @@ resource "aws_security_group" "pipeline" {
   vpc_id      = data.aws_vpc.default.id
 
   ingress {
-    description = "SSH"
+    description = "SSH from operator"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = [var.ssh_cidr]
   }
 
   egress {
@@ -111,7 +116,7 @@ resource "aws_security_group" "pipeline" {
   }
 }
 
-# --- IAM Role for EC2 (S3 access) ---
+# --- IAM Role for EC2 (S3 access, scoped to project prefix) ---
 
 resource "aws_iam_role" "pipeline" {
   name = "firm-pair-merger-pipeline-role"
@@ -140,16 +145,24 @@ resource "aws_iam_role_policy" "s3_access" {
     Version = "2012-10-17"
     Statement = [
       {
+        Sid    = "ListBucketUnderPrefix"
+        Effect = "Allow"
+        Action = "s3:ListBucket"
+        Resource = "arn:aws:s3:::${var.s3_bucket}"
+        Condition = {
+          StringLike = {
+            "s3:prefix" = ["${var.s3_prefix}/*"]
+          }
+        }
+      },
+      {
+        Sid    = "ReadWriteProjectObjects"
         Effect = "Allow"
         Action = [
           "s3:GetObject",
-          "s3:PutObject",
-          "s3:ListBucket"
+          "s3:PutObject"
         ]
-        Resource = [
-          "arn:aws:s3:::${var.s3_bucket}",
-          "arn:aws:s3:::${var.s3_bucket}/${var.s3_prefix}/*"
-        ]
+        Resource = "arn:aws:s3:::${var.s3_bucket}/${var.s3_prefix}/*"
       }
     ]
   })
@@ -161,6 +174,8 @@ resource "aws_iam_instance_profile" "pipeline" {
 }
 
 # --- EC2 Instance ---
+# g5 instances have NVMe instance store but it must be explicitly mounted.
+# We use a large root EBS volume instead for simplicity and persistence.
 
 resource "aws_instance" "pipeline" {
   ami                    = data.aws_ami.deep_learning.id
@@ -170,7 +185,7 @@ resource "aws_instance" "pipeline" {
   iam_instance_profile   = aws_iam_instance_profile.pipeline.name
 
   root_block_device {
-    volume_size = 100
+    volume_size = 200  # GB — enough for data (~5GB), checkpoints (~50GB), model cache
     volume_type = "gp3"
   }
 
