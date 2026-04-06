@@ -30,7 +30,7 @@ Torrin has access to Jan Bena's AWS account through cloud administrator David. T
 | GPU             | 1x NVIDIA A10G (24 GB VRAM) |
 | vCPUs           | 32                          |
 | RAM             | 128 GB                      |
-| Storage         | 900 GB NVMe                 |
+| Storage         | 200 GB gp3 EBS (root volume) |
 | On-demand price | ~$2.45/hr (us-west-2)       |
 
 **Why g5.8xlarge over alternatives:**

@@ -111,37 +111,42 @@ def main():
     cited_texts = ca["abstract"].tolist()
     del ca
 
-    # Use encode_texts for cited abstracts (single text, not title+abstract pairs)
+    # Use encode_texts for cited abstracts (single text, not title+abstract pairs).
+    # Supports prefix-resume: if a partial checkpoint exists, resume from where it stopped.
+    every_n = config["embedding"].get("checkpoint_every_n", 100_000)
+    start_idx = 0
+    chunks = []
+
     if cm.checkpoint_exists(cited_path):
-        print("  Resuming from cited abstracts checkpoint...")
-        loaded_ids, cited_embeddings, _ = cm.load_embeddings(cited_path)
-        if loaded_ids == cited_patent_ids:
-            print(f"  Checkpoint complete: {cited_embeddings.shape}")
+        loaded_ids, loaded_emb, _ = cm.load_embeddings(cited_path)
+        expected_prefix = cited_patent_ids[:len(loaded_ids)]
+        if loaded_ids == expected_prefix:
+            start_idx = len(loaded_ids)
+            chunks.append(loaded_emb)
+            print(f"  Resuming from checkpoint: {start_idx:,}/{len(cited_texts):,} already encoded")
         else:
             raise ValueError(
-                f"Cited abstracts checkpoint ID mismatch: checkpoint has "
-                f"{len(loaded_ids)} entries, expected {len(cited_patent_ids)}. "
+                f"Cited abstracts checkpoint ID mismatch. "
                 f"Delete {cited_path} to re-encode."
             )
-    else:
-        every_n = config["embedding"].get("checkpoint_every_n", 100_000)
-        chunks = []
-        for chunk_start in range(0, len(cited_texts), every_n):
-            chunk_end = min(chunk_start + every_n, len(cited_texts))
-            chunk = cited_texts[chunk_start:chunk_end]
-            chunk_emb = encoder.encode_texts(chunk, show_progress=True)
-            chunks.append(chunk_emb)
 
-            # Save intermediate checkpoint
-            progress = chunk_end
-            all_so_far = np.concatenate(chunks, axis=0)
-            cm.save_embeddings(
-                cited_patent_ids[:progress], all_so_far, cited_path,
-                metadata={"model_name": config["embedding"]["model_name"]},
-            )
-            print(f"  Cited checkpoint: {progress:,}/{len(cited_texts):,}")
+    remaining = cited_texts[start_idx:]
+    for chunk_start in range(0, len(remaining), every_n):
+        chunk_end = min(chunk_start + every_n, len(remaining))
+        chunk = remaining[chunk_start:chunk_end]
+        chunk_emb = encoder.encode_texts(chunk, show_progress=True)
+        chunks.append(chunk_emb)
 
-        cited_embeddings = np.concatenate(chunks, axis=0)
+        # Save intermediate checkpoint
+        progress = start_idx + chunk_end
+        all_so_far = np.concatenate(chunks, axis=0)
+        cm.save_embeddings(
+            cited_patent_ids[:progress], all_so_far, cited_path,
+            metadata={"model_name": config["embedding"]["model_name"]},
+        )
+        print(f"  Cited checkpoint: {progress:,}/{len(cited_texts):,}")
+
+    cited_embeddings = np.concatenate(chunks, axis=0) if chunks else np.empty((0, 768), dtype=np.float32)
 
     t_cit_enc = time.time() - t0
     print(f"  Cited embeddings: {cited_embeddings.shape} ({t_cit_enc/60:.1f} min elapsed)")
