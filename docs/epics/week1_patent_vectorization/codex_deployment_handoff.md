@@ -34,8 +34,8 @@ Since your last review (approved at commit `2626c40`), the project has evolved:
 | Artifact | Path | Purpose |
 |----------|------|---------|
 | ADR-003 | `docs/adr/adr_003_cloud_architecture.md` | Instance selection (g5.8xlarge), S3 namespace, cost estimates |
-| Terraform | `infrastructure/main.tf` | EC2, security group, IAM role, instance profile |
-| Bootstrap script | `infrastructure/user_data.sh` | User-data: clone repo, install deps, pull data from S3 |
+| Terraform | `infrastructure/main.tf` | EC2 instance + security group (no IAM resources) |
+| Bootstrap script | `infrastructure/user_data.sh` | User-data: clone repo, install deps. S3 pull is manual post-SSH. |
 | Full pipeline script | `scripts/run_full_pipeline.py` | Handles dedup, nulls, memory management, progress logging |
 | Config update | `src/config/config.yaml` | v2 filenames |
 | Loader update | `src/data_loading/patent_loader.py` | Warns on duplicate patent_ids instead of rejecting |
@@ -65,7 +65,7 @@ Expected — biotech patents cite prior art outside the dataset's scope. Mean po
 ### 1. Terraform Configuration (`infrastructure/main.tf`)
 
 Review for:
-- **IAM scope**: `s3:ListBucket` is scoped with `s3:prefix` condition to `firm-pair-merger/*` only. `GetObject`/`PutObject` restricted to that prefix. Verify this doesn't grant access to `financial-topic-modeling/`.
+- **No IAM resources**: S3 access uses Torrin's existing `torrin` profile configured manually after SSH. No roles or instance profiles in Terraform.
 - **Security group**: SSH restricted to operator CIDR via required `var.ssh_cidr` variable.
 - **AMI selection**: We're using `Deep Learning OSS Nvidia Driver AMI GPU PyTorch *Ubuntu 22.04*` via data source. Verify the filter is specific enough to get a stable, working AMI.
 - **Instance type**: g5.8xlarge (A10G, 128GB RAM, $2.45/hr). ADR-003 documents the sizing rationale.
@@ -73,7 +73,7 @@ Review for:
 ### 2. Bootstrap Script (`infrastructure/user_data.sh`)
 
 Review for:
-- **S3 data pull**: Does the `aws s3 cp --recursive` correctly pull from the right prefix?
+- **Scope**: Bootstrap only clones repo and installs deps. S3 data pull is a manual post-SSH step (credentials not available at boot).
 - **Git clone**: Uses HTTPS (public repo). If the repo is private, this needs an auth token.
 - **Venv setup**: Does the dependency install order work on the Deep Learning AMI?
 

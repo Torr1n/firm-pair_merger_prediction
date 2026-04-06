@@ -65,13 +65,15 @@ s3://ubc-torrin/
 
 Pre-installed NVIDIA drivers, CUDA, and PyTorch. We install project-specific dependencies (sentence-transformers, umap-learn) on top.
 
-### Deployment pattern: Single-instance batch job
+### Deployment pattern: Operator-driven single instance
 
-1. Launch g5.8xlarge with bootstrap script (user-data)
-2. Bootstrap installs project dependencies, pulls data from S3
-3. Runs `scripts/run_full_pipeline.py`
-4. Pushes results back to S3
-5. Instance can be terminated manually or via CloudWatch alarm on idle
+1. `terraform apply` launches g5.8xlarge; user-data installs dependencies and clones repo
+2. Operator SSHs in, configures AWS credentials (`aws configure --profile torrin`)
+3. Operator pulls data from S3 and runs `scripts/run_full_pipeline.py`
+4. Operator pushes results to S3 and cleans up credentials
+5. `terraform destroy` terminates instance
+
+S3 access uses Torrin's existing IAM user credentials (profile `torrin`), configured manually on the instance after SSH. No IAM roles or instance profiles are created by Terraform — this avoids the `iam:CreateRole`/`iam:PassRole` permission requirement. Credentials must be removed from the instance after the run.
 
 No orchestration (Step Functions, Batch) needed — this is a single sequential pipeline on one machine.
 
