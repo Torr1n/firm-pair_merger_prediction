@@ -1,16 +1,21 @@
-"""Run the patent vectorization pipeline on the full v2 dataset.
+"""Run the patent vectorization pipeline on the full v3 dataset.
 
 Usage (on AWS g5.8xlarge or equivalent):
     source venv/bin/activate
     python scripts/run_full_pipeline.py 2>&1 | tee output/pipeline.log
 
 After completion:
-    aws s3 sync output/ s3://ubc-torrin/firm-pair-merger/output/
+    aws s3 sync output/ s3://ubc-torrin/firm-pair-merger/output/ --profile torrin
 
 Checkpoint behavior:
     - Title+abstract encoding checkpoints every 100K patents (~5 min on GPU)
     - Citation encoding checkpoints every 100K abstracts
     - If interrupted, re-run the same command to resume from last checkpoint
+
+Data files (v3):
+    - patent_metadata_dedup: Pre-deduplicated by Amie for encoding (1.52M unique patents)
+    - patent_metadata: Full file with co-assignments for Week 2 portfolio construction
+    - post_deal_flag: Filter to ==0 for clean pre-acquisition features
 """
 
 import sys
@@ -39,45 +44,57 @@ def main():
     config = load_config()
 
     print("=" * 70)
-    print("Patent Vectorization Pipeline — Full Scale (v2 dataset)")
+    print("Patent Vectorization Pipeline — Full Scale (v3 dataset)")
     print("=" * 70)
 
-    # --- Stage 0: Load and prepare data ---
+    # --- Stage 0: Load data ---
     print("\n[Stage 0] Loading data...")
     loader = PatentLoader(config)
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("always")
-        pm = loader.load_patent_metadata(columns=["patent_id", "gvkey", "title", "abstract"])
+    # Use the pre-deduplicated file for encoding (Amie handled dedup in v3)
+    print("  Loading deduplicated patents for encoding...")
+    pm_dedup = loader.load_patent_metadata(
+        columns=["patent_id", "gvkey", "title", "abstract", "post_deal_flag"],
+        source="dedup",
+    )
+    print(f"  Dedup patents: {len(pm_dedup):,} (unique patent_ids for encoding)")
 
-    cn = loader.load_citation_network()
-    print(f"  Patents: {len(pm):,}")
-    print(f"  Citation edges: {len(cn):,}")
+    # Filter to pre-deal patents only (post_deal_flag == 0)
+    pre_deal_mask = pm_dedup["post_deal_flag"] == 0
+    n_post_deal = (~pre_deal_mask).sum()
+    pm_dedup = pm_dedup[pre_deal_mask].reset_index(drop=True)
+    print(f"  Filtered post-deal patents: {n_post_deal:,} removed")
+    print(f"  Pre-deal patents for encoding: {len(pm_dedup):,}")
 
-    # Deduplicate patents by patent_id (keep first occurrence).
-    # Multi-firm patents are preserved in the gvkey mapping but encoded once.
-    n_before = len(pm)
-    pm_deduped = pm.drop_duplicates(subset="patent_id", keep="first").reset_index(drop=True)
-    n_after = len(pm_deduped)
-    print(f"  Deduplicated: {n_before:,} -> {n_after:,} unique patents "
-          f"({n_before - n_after:,} multi-firm duplicates)")
-
-    # Drop patents with no title AND no abstract (cannot embed)
-    has_text = pm_deduped["title"].notna() | pm_deduped["abstract"].notna()
+    # Drop patents with no title AND no abstract
+    has_text = pm_dedup["title"].notna() | pm_dedup["abstract"].notna()
     n_dropped = (~has_text).sum()
     if n_dropped > 0:
         print(f"  Dropping {n_dropped:,} patents with no title and no abstract")
-        pm_deduped = pm_deduped[has_text].reset_index(drop=True)
+        pm_dedup = pm_dedup[has_text].reset_index(drop=True)
 
-    print(f"  Final patent count for encoding: {len(pm_deduped):,}")
+    print(f"  Final patent count for encoding: {len(pm_dedup):,}")
 
-    # Save gvkey mapping ONLY for patents that will have vectors
-    encodable_ids = set(pm_deduped["patent_id"])
-    gvkey_map = pm[pm["patent_id"].isin(encodable_ids)][["patent_id", "gvkey"]]
+    # Save gvkey mapping from FULL metadata (includes co-assignments) for Week 2
+    print("  Loading full metadata for gvkey mapping...")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        pm_full = loader.load_patent_metadata(
+            columns=["patent_id", "gvkey", "post_deal_flag"],
+        )
+    # Only keep mappings for patents we're encoding AND pre-deal
+    encodable_ids = set(pm_dedup["patent_id"])
+    gvkey_map = pm_full[
+        (pm_full["patent_id"].isin(encodable_ids)) & (pm_full["post_deal_flag"] == 0)
+    ][["patent_id", "gvkey"]]
     gvkey_map.to_parquet(f"{OUTPUT_DIR}/gvkey_map.parquet", index=False)
     print(f"  Gvkey map: {len(gvkey_map):,} rows "
-          f"({gvkey_map['gvkey'].nunique():,} firms)")
-    del pm  # free original
+          f"({gvkey_map['gvkey'].nunique():,} firms, "
+          f"includes co-assignments)")
+    del pm_full
+
+    cn = loader.load_citation_network()
+    print(f"  Citation edges: {len(cn):,}")
 
     cm = CheckpointManager(OUTPUT_DIR)
 
@@ -85,10 +102,10 @@ def main():
     print("\n[Stage 1a] Encoding title+abstract with PatentSBERTa...")
     encoder = PatentEncoder(config)
 
-    patent_ids = pm_deduped["patent_id"].tolist()
-    titles = pm_deduped["title"].fillna("").tolist()
-    abstracts = pm_deduped["abstract"].fillna("").tolist()
-    del pm_deduped
+    patent_ids = pm_dedup["patent_id"].tolist()
+    titles = pm_dedup["title"].fillna("").tolist()
+    abstracts = pm_dedup["abstract"].fillna("").tolist()
+    del pm_dedup
 
     ta_path = f"{OUTPUT_DIR}/title_abstract_embeddings.parquet"
     _, ta_embeddings = encoder.encode_patents(
@@ -111,8 +128,7 @@ def main():
     cited_texts = ca["abstract"].tolist()
     del ca
 
-    # Use encode_texts for cited abstracts (single text, not title+abstract pairs).
-    # Supports prefix-resume: if a partial checkpoint exists, resume from where it stopped.
+    # Encode with prefix-resume support
     every_n = config["embedding"].get("checkpoint_every_n", 100_000)
     start_idx = 0
     chunks = []
@@ -123,7 +139,7 @@ def main():
         if loaded_ids == expected_prefix:
             start_idx = len(loaded_ids)
             chunks.append(loaded_emb)
-            print(f"  Resuming from checkpoint: {start_idx:,}/{len(cited_texts):,} already encoded")
+            print(f"  Resuming from checkpoint: {start_idx:,}/{len(cited_texts):,}")
         else:
             raise ValueError(
                 f"Cited abstracts checkpoint ID mismatch. "
@@ -137,7 +153,6 @@ def main():
         chunk_emb = encoder.encode_texts(chunk, show_progress=True)
         chunks.append(chunk_emb)
 
-        # Save intermediate checkpoint
         progress = start_idx + chunk_end
         all_so_far = np.concatenate(chunks, axis=0)
         cm.save_embeddings(
@@ -155,9 +170,9 @@ def main():
     print("\n[Stage 1c] Aggregating citation embeddings (mean pooling)...")
     aggregator = CitationAggregator(config)
     citation_lookup = aggregator.build_citation_lookup(cited_patent_ids, cited_embeddings)
-    del cited_embeddings  # free ~11 GB
+    del cited_embeddings
 
-    # Compute coverage stats BEFORE freeing the lookup
+    # Coverage stats before freeing lookup
     stats = aggregator.get_coverage_stats(patent_ids, cn, citation_lookup)
     print(f"  Zero-citation patents: {stats['zero_citation_patents']:,} "
           f"({stats['zero_citation_pct']:.1%})")

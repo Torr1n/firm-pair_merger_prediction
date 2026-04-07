@@ -15,6 +15,7 @@ class PatentLoader:
         data_cfg = config["data"]
         self._paths = {
             "patent_metadata": data_cfg["patent_metadata"],
+            "patent_metadata_dedup": data_cfg.get("patent_metadata_dedup", data_cfg["patent_metadata"]),
             "cited_abstracts": data_cfg["cited_abstracts"],
             "citation_network": data_cfg["citation_network"],
         }
@@ -40,15 +41,23 @@ class PatentLoader:
 
         return pq.read_table(str(path), columns=read_cols).to_pandas()
 
-    def load_patent_metadata(self, columns: list[str] | None = None) -> pd.DataFrame:
-        # Always load patent_id for validation even if not requested
-        required = ["patent_id", "title", "abstract"]
+    def load_patent_metadata(
+        self, columns: list[str] | None = None, source: str = "full"
+    ) -> pd.DataFrame:
+        """Load patent metadata.
+
+        Args:
+            columns: Columns to load. None loads all available.
+            source: 'full' for complete metadata (includes co-assignments),
+                    'dedup' for pre-deduplicated file (unique patent_ids for encoding).
+        """
+        key = "patent_metadata_dedup" if source == "dedup" else "patent_metadata"
+        required = ["patent_id"]
         if columns is not None:
             validation_cols = list(set(columns) | {"patent_id"})
         else:
-            # Load all available columns (filtered by _read)
             validation_cols = None
-        df = self._read("patent_metadata", validation_cols, required=required)
+        df = self._read(key, validation_cols, required=required)
 
         if df["patent_id"].isna().any():
             raise ValueError("patent_metadata contains null patent_ids")

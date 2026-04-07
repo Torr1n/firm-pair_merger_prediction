@@ -22,11 +22,12 @@ umap:
   metric: "cosine"
   random_state: 42
 
-# --- Data Paths (v2: tech + biotech, expanded private firm coverage) ---
+# --- Data Paths (v3: tech + biotech, clean scope, post_deal_flag, pre-deduped) ---
 data:
-  patent_metadata: "data/firm_patents_text_metadata_v2.parquet"
-  cited_abstracts: "data/cited_abstracts_v2.parquet"
-  citation_network: "data/citation_network_v2.parquet"
+  patent_metadata: "data/firm_patents_text_metadata_techbio_v3.parquet"
+  patent_metadata_dedup: "data/firm_patents_dedup_techbio_v3.parquet"
+  cited_abstracts: "data/cited_abstracts_techbio_v3.parquet"
+  citation_network: "data/citation_network_techbio_v3.parquet"
 
 # --- Output Paths ---
 output:
