@@ -5,7 +5,7 @@
 **Date**: 2026-04-07  
 **Session span**: 2026-03-31 through 2026-04-07  
 **Repository**: `git@github.com:Torr1n/firm-pair_merger_prediction.git` (branch: `master`)  
-**HEAD at handover**: commit `1a40eb5`
+**HEAD at handover**: commit `ef575ca`
 
 ---
 
@@ -65,6 +65,30 @@ Building on Bena & Li (2014), the project redefines "technological overlap" from
 4. **Extensions** (Week 4): Synthetic portfolio matching — A+B≈C? and find B such that A+x≈C
 
 Training window: 2020 patent data (crisis data surfaces latent value). Validation: 2021 M&A "Springboard Effect."
+
+---
+
+## Session Timeline (7 Days)
+
+Understanding the arc helps you understand why things are the way they are:
+
+**Day 1 (Mar 30-31)**: Empty repo → venv setup. Disk ran full. WSL-NTFS I/O made pip install take hours. PyTorch wheel extraction was agonizing. This consumed massive context and required compaction. *Lesson learned: WSL is for editing, not compute. Heavy work goes to AWS or desktop.*
+
+**Day 2 (Apr 1)**: Post-compaction restart. EDA notebook (8 data quality questions), ADRs 001-002, spec, all 5 modules implemented with TDD (38 tests). Torrin bypassed the Codex design gate to maintain velocity — a pragmatic call he later acknowledged carried risk. 1K sample pipeline built. Torrin ran on laptop but it was too slow.
+
+**Day 3 (Apr 2)**: Pushed to GitHub. Torrin pulled on desktop. **GPU compatibility issue** — 1080 Ti CC 6.1 not supported by current PyTorch. Fixed with CUDA probe fallback. Pipeline ran in 13.4 min on CPU. **Key discoveries**: L2 norms ~6.8 (not unit-normalized), **bimodal citation norms** (Torrin spotted this in the histogram — investigated and explained by citation count, r=-0.317). First Codex review found critical resume-corruption bug and checkpoint no-op. All fixed. Codex approved on re-review.
+
+**Day 4-5 (Apr 3-5)**: Amie delivered v2 data (biotech expansion). Validated — found 14% null abstracts, 201K duplicate patent_ids, lower citation coverage. Cloud architecture designed (ADR-003, Terraform). Second Codex review found **critical encoding bug** (`abstract + " " + abstract`) plus 5 other issues. Three rounds of fixes. IAM permissions blocker resolved by removing IAM from Terraform. Codex approved deployment path.
+
+**Day 6 (Apr 6)**: Amie's detailed response explaining data issues (pre-1976 nulls, co-assigned patents, biotech caveats). v3 data delivered with clean scope, dedup file, post_deal_flag. Pipeline updated for v3. Production run deployed on AWS by Codex.
+
+**Day 7 (Apr 7)**: Production run healthy on AWS (~1.4M/1.45M patents encoded). Strategic analysis: identified 13 technical debt items. Three parallel agents dispatched to fix them all + write Week 2 bootstrap prompt. 45 total tests. Handover initiated.
+
+**Key pain points across the session:**
+- WSL-NTFS I/O wasted an entire day on venv setup
+- Three data versions (v1→v2→v3) each required re-validation, config updates, doc updates
+- The Codex-found encoding bug (`abstract + abstract`) would have produced methodologically wrong results at scale — validates the review process
+- Context ran low by Day 7, necessitating this handover
 
 ---
 
@@ -235,6 +259,10 @@ All previously identified debt was resolved in this session's final commit (`1a4
 - **CitationAggregator performance**: Python loop is O(n_patents * avg_citations). Documented as ~10-30 min at scale. Not optimized per parsimony principle — vectorize only if it becomes a bottleneck.
 - **No UMAPReducer.transform()**: The spec mentions storing the fitted model for held-out data, but no `transform` method is exposed. Not needed for Week 1-2, may be needed for Week 4 extensions.
 - **No integration tests**: Only unit tests exist. End-to-end test through all modules is missing.
+- **Config output paths unused**: `config.yaml` defines output paths (`output.title_abstract_embeddings`, etc.) but the pipeline scripts hardcode `OUTPUT_DIR = "output/embeddings"` and build paths manually. The config paths are dead configuration.
+- **No tests for `load_config()`**: Edge cases (malformed YAML, missing file, extra keys) are untested.
+- **Uncommitted Codex work**: `infrastructure/main.tf` and `user_data.sh` have uncommitted modifications from Codex (subnet pinning, commit pinning, data version templating). Also untracked: `scripts/watch_pipeline_and_shutdown.sh` (Codex's watchdog), validation PNGs in `notebooks/`, `.codex` file, Terraform state/lock files.
+- **Stale v2 data files still on disk**: `data/` contains both v2 and v3 files (4.2 GB total). v2 can be removed to save space since v3 supersedes it and v2 is backed up in S3.
 
 ---
 
@@ -266,6 +294,24 @@ These were negotiated during the review process and must be honored:
 - Codex reviews with structured findings (Critical/Major/Minor/Note)
 - Fix all Critical and Major items, then request re-review
 - Codex also handles deployment ops (Terraform apply, SSH, monitoring)
+
+**The Codex relay workflow** (from FTM project, used throughout this project):
+1. You produce work
+2. Torrin asks: "Could you summarize your plan, your thought process, reasoning and judgement behind decisions for me to provide back to Codex?"
+3. He pastes your summary to Codex
+4. He pastes Codex's review back as a `<Codex>` tagged message
+5. You address findings, iterate until approved
+
+**Codex handoff template** (standardized from FTM):
+```
+You are joining this project cold. Do not assume context not written here.
+Repository: [path]
+Branch: [branch]
+Operating model: [who does what]
+Mission: [specific scoped task]
+[Constraints]
+[Verification steps]
+```
 
 ### The Team Communication Pattern
 - Torrin drafts team messages himself but asks for help filling in technical details
@@ -404,3 +450,16 @@ Before the production run completes (if you have bandwidth):
 - Draft ADRs 004-007 (design documents, not code — don't need the data)
 - Review the Week 2 bootstrap prompt and assess whether it's complete
 - Investigate the GMM serialization question (how to store per-firm GMM parameters)
+
+### Items Left Unfinished at Session End
+
+These are threads that were started or identified but not completed:
+
+1. **Production run results not yet retrieved**: The AWS run was in progress. Results need to be downloaded from S3 and validated (shapes, counts, join integrity).
+2. **EC2 instance may still be running**: Terraform state shows live infrastructure at ~$2.45/hr. Verify with Codex whether it was terminated after the run completed.
+3. **Uncommitted Codex modifications**: `infrastructure/main.tf`, `user_data.sh`, and `watch_pipeline_and_shutdown.sh` have changes from Codex's deployment work that should be committed.
+4. **CitationAggregator 100K timing benchmark**: Committed to Codex but never executed. Should happen before any future full-scale run.
+5. **Normalization sensitivity check**: Week 2 EDA deliverable — compare raw vs L2 vs z-score before GMM fitting.
+6. **Biotech methodology ADR**: Amie's caveats documented in memory but no formal ADR. Flagged for Week 3 when BC comparison is implemented.
+7. **CLAUDE.md and data_prep.md still reference v1 numbers**: These high-visibility documents should be updated to v3 reality.
+8. **ADR-001 and ADR-002 statuses**: Still say "Proposed" and "Reviewers: Codex (pending)" despite being implemented and Codex-approved. Should be updated to "Accepted."
