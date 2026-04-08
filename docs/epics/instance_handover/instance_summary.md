@@ -322,16 +322,71 @@ This project inherits its development culture from Torrin's prior FTM project (1
 
 ---
 
+## Known Documentation Staleness
+
+A thorough audit revealed several documents still reference v1/v2 numbers. The authoritative data source is `config.yaml` (v3 filenames) and the memory file `project_data_schema_findings.md` (v3 row counts). Do NOT trust these documents' numbers without checking:
+
+| Document | Stale Reference | Correct Value |
+|----------|----------------|---------------|
+| `CLAUDE.md` data table | ~2.7M patents, ~3.7M cited, ~46M edges | 1.52M dedup, 2.62M cited, 35.4M edges (v3) |
+| `data_prep.md` | Original v1 scope | Superseded by v3 |
+| ADR-001, ADR-002 | 1,211,889 patents (v1) | 1,519,401 dedup (v3) |
+| ADR-003 | 2.57M patents (v2) | 1,519,401 dedup (v3) — instance still valid, just oversized |
+| Week 1 retrospective | 1,892 firms (v1) | 15,814 firms (v3) |
+| Runtime estimates doc | v1 numbers | Stale — v3 is ~25% smaller than v2, estimates are conservative |
+| ADR-001, ADR-002 status | "Proposed" | Should be "Accepted" (Codex-reviewed and implemented) |
+| Spec header | "Reviewers: Codex (pending)" | Contradicts "Accepted (Codex-approved)" in title |
+
+**The config.yaml and the Week 2 bootstrap prompt have correct v3 numbers.** When in doubt, trust those.
+
+**Missing from config.yaml:** The `gvkey_map` output path is defined in the spec but not in the actual config file. The pipeline script hardcodes it as `output/embeddings/gvkey_map.parquet`.
+
+---
+
+## Working with Torrin — What the Sub-Agents Found
+
+Beyond the profile in the "Who You're Working With" section, deeper analysis of conversation patterns revealed:
+
+**Voice transcription is his primary input mode.** His messages are long, conversational, sometimes stream-of-consciousness. The core directive is usually in the first and last paragraphs. Don't mistake informality for imprecision — his voice transcripts contain highly specific technical requirements embedded in natural language.
+
+**When typed, he is terse.** "Looks solid - proceed." "Sounds good." "What are your thoughts?" Don't over-interpret brevity as dissatisfaction.
+
+**He relays between you and Codex.** The established pattern is: you produce work → Torrin asks for a structured summary → he pastes it to Codex → he pastes Codex's review back as `<Codex>` tagged message → you address findings. His recurring prompt: "Could you summarize your plan, your thought process, reasoning and judgement behind decisions for me to provide back to Codex?"
+
+**He drafts team messages and asks you to fill in technical details.** He'll provide a rough template in his casual team voice and ask you to enrich it with findings while preserving his tone. The output should be collegial and technically precise but not jargon-heavy — his teammates are economics students, not engineers.
+
+**Trust is earned through process discipline.** Once you demonstrate you follow specs, write tests first, and don't cut corners, he gives significant autonomy. He approved proceeding past a design gate once — but the resulting bug (caught by Codex) validated why the process exists.
+
+**He proactively manages context.** He compacts aggressively, writes instance summaries, and shifts your role from implementer to documenter when context runs low. He treats each instance as a specialized role and relies on handover documents as the sole communication channel between sessions.
+
+---
+
+## FTM Project Patterns That Apply Here
+
+From analysis of the predecessor Financial Topic Modeling project (12+ sprints, production on AWS):
+
+**The "Summary for Codex" pattern**: Claude produces verbose analysis, then distills a structured summary for Codex review. This is a core workflow — Codex never sees the raw conversation, only curated handoffs.
+
+**The smoke test ladder**: Never jump from local to production. The pattern is: tiny subset → small sample → medium run → full production. We followed this (1K sample → desktop → AWS g5.8xlarge).
+
+**Scoped Claude instances**: Each implementation task gets a fresh instance with a self-contained brief, preventing context pollution. You are one of these scoped instances.
+
+**Feature flags over conditional resources**: In Terraform, use boolean variables with `count` for optional resources. AWS IAM in particular requires careful handling — the university account has restricted permissions.
+
+**Hard lesson from FTM**: Plans consumed by a fresh instance must be maximally explicit. "All file paths must be absolute. All AWS CLI commands must include --profile and --region. Interpretation of diagnostic output must be structured as decision trees, not prose." Ambiguity costs an entire round-trip.
+
+---
+
 ## Files to Read First
 
 In priority order for a new instance:
 
-1. `CLAUDE.md` — Project instructions, values, module structure
-2. `docs/epics/week2_firm_portfolios/bootstrap_prompt.md` — Your primary directive for Week 2
-3. `docs/sprint_retrospectives/week1_instance_summary.md` — What was built and learned
-4. `src/config/config.yaml` — Current configuration
-5. `docs/specs/patent_vectorizer_spec.md` — Week 1 interface contracts (your foundation)
-6. This document — The full context package
+1. This document — Full context package (read first for orientation)
+2. `CLAUDE.md` — Project instructions, values, module structure
+3. `docs/epics/week2_firm_portfolios/bootstrap_prompt.md` — Your primary directive for Week 2
+4. `docs/sprint_retrospectives/week1_instance_summary.md` — What was built and learned
+5. `src/config/config.yaml` — Current configuration (authoritative for file paths)
+6. `docs/specs/patent_vectorizer_spec.md` — Week 1 interface contracts (your foundation)
 
 ---
 
