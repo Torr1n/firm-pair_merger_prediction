@@ -1,7 +1,7 @@
 # Patent Vectorizer Pipeline — Interface Specification
 
-**Status**: Proposed  
-**Date**: 2026-04-01  
+**Status**: Accepted (Codex-approved)  
+**Date**: 2026-04-07  
 **Authors**: Torrin Pataki, Claude Code  
 **Reviewers**: Codex (pending)  
 **ADR Dependencies**: ADR-001 (embedding model), ADR-002 (citation aggregation)
@@ -14,15 +14,17 @@ This spec defines the interfaces for five modules that compose the Week 1 patent
 
 **Pipeline flow**:
 ```
-patent_metadata.parquet ──→ PatentLoader ──→ PatentEncoder ──→ title_abstract_embeddings.parquet
-                                                                         │
-cited_abstracts.parquet ──→ PatentLoader ──→ PatentEncoder ──→ ┐        │
+patent_metadata_dedup.parquet ──→ PatentLoader(source="dedup") ──→ PatentEncoder ──→ title_abstract_embeddings.parquet
+                                                                                │
+patent_metadata.parquet ──→ PatentLoader(source="full") ──→ gvkey_map.parquet   │
+                                                                                │
+cited_abstracts.parquet ──→ PatentLoader ──→ PatentEncoder ──→ ┐               │
 citation_network.parquet ─→ PatentLoader ──────────────────→ CitationAggregator ──→ citation_embeddings.parquet
-                                                                         │
-                                                              ┌──────────┘
-                                                         Concatenate (1536D)
-                                                              │
-                                                         UMAPReducer ──→ patent_vectors_50d.parquet
+                                                                                │
+                                                                 ┌──────────────┘
+                                                            Concatenate (1536D)
+                                                                 │
+                                                            UMAPReducer ──→ patent_vectors_50d.parquet
 ```
 
 ---
@@ -105,7 +107,7 @@ class CheckpointManager:
 
 **File**: `src/data_loading/patent_loader.py`
 
-Loads and validates the three parquet data files.
+Loads and validates the parquet data files (full metadata, dedup metadata, cited abstracts, citation network).
 
 ### Interface
 
@@ -115,24 +117,37 @@ class PatentLoader:
         """
         Args:
             config: Parsed YAML config dict. Expected keys under 'data':
-                - patent_metadata: path to patent_metadata.parquet
+                - patent_metadata: path to full patent metadata parquet (with co-assignments)
+                - patent_metadata_dedup: path to pre-deduplicated patent metadata parquet
+                  (unique patent_ids, used for encoding)
                 - cited_abstracts: path to cited_abstracts.parquet
                 - citation_network: path to citation_network.parquet
         """
 
     def load_patent_metadata(
-        self, columns: list[str] | None = None
+        self, columns: list[str] | None = None, source: str = "full"
     ) -> pd.DataFrame:
         """Load patent metadata with optional column selection.
 
         Default columns if None: all available columns (excluding __index_level_0__)
 
+        Args:
+            columns: Columns to load. None loads all available.
+            source: 'full' for complete metadata (includes co-assignments, requires
+                    ["patent_id", "title", "abstract"]). 'dedup' for pre-deduplicated
+                    file with unique patent_ids for encoding (requires ["patent_id"]).
+
+        Note: The dedup file has unique patent_ids (one row per patent). The full
+        file may contain co-assignments (same patent_id linked to multiple gvkeys).
+
         Validation:
             - File exists and is readable
-            - Required columns are present: patent_id, title, abstract
+            - Required columns are present:
+              - source="full": ["patent_id", "title", "abstract"]
+              - source="dedup": ["patent_id"]
             - patent_id has no nulls
-            - Warns (UserWarning) if patent_id has duplicates. v2 data contains
-              multi-firm patents (same patent linked to multiple gvkeys). Callers
+            - Warns (UserWarning) if patent_id has duplicates. v3 data's full file
+              contains co-assignments (same patent linked to multiple gvkeys). Callers
               must deduplicate before encoding if unique patent vectors are required.
 
         Returns:
@@ -183,10 +198,11 @@ class PatentLoader:
         """
 
     def get_row_counts(self) -> dict[str, int]:
-        """Return row counts for all three files without loading data.
+        """Return row counts for all data files without loading data.
 
         Returns:
-            Dict with keys 'patent_metadata', 'cited_abstracts', 'citation_network'.
+            Dict with keys 'patent_metadata', 'patent_metadata_dedup',
+            'cited_abstracts', 'citation_network'.
         """
 ```
 
@@ -470,9 +486,10 @@ umap:
   random_state: 42
 
 data:
-  patent_metadata: "data/patent_metadata.parquet"
-  cited_abstracts: "data/cited_abstracts.parquet"
-  citation_network: "data/citation_network.parquet"
+  patent_metadata: "data/firm_patents_text_metadata_techbio_v3.parquet"
+  patent_metadata_dedup: "data/firm_patents_dedup_techbio_v3.parquet"
+  cited_abstracts: "data/cited_abstracts_techbio_v3.parquet"
+  citation_network: "data/citation_network_techbio_v3.parquet"
 
 output:
   checkpoint_dir: "output/embeddings"
@@ -480,6 +497,7 @@ output:
   citation_embeddings: "output/embeddings/citation_embeddings.parquet"
   concatenated_vectors: "output/embeddings/concatenated_1536d.parquet"
   patent_vectors_50d: "output/embeddings/patent_vectors_50d.parquet"
+  gvkey_map: "output/embeddings/gvkey_map.parquet"
 ```
 
 ---
@@ -530,9 +548,12 @@ Each module has a corresponding test file in `tests/unit/`. Tests are written BE
 
 | Stage | File | Shape | Contents |
 |-------|------|-------|----------|
-| 1a | `title_abstract_embeddings.parquet` | (1,211,889 × 768) | PatentSBERTa on title+abstract |
-| 1b | `citation_embeddings.parquet` | (1,211,889 × 768) | Mean-pooled citation embeddings (7.6% zero vectors) |
-| 2 | `concatenated_1536d.parquet` | (1,211,889 × 1536) | Concatenation of 1a and 1b |
-| 3 | `patent_vectors_50d.parquet` | (1,211,889 × 50) | UMAP reduction of stage 2 |
+| 0 | `gvkey_map.parquet` | (~1,447,673 × 2) | patent_id to gvkey mapping from full metadata |
+| 1a | `title_abstract_embeddings.parquet` | (~1,447,673 × 768) | PatentSBERTa on title+abstract |
+| 1b | `citation_embeddings.parquet` | (~1,447,673 × 768) | Mean-pooled citation embeddings (~8% zero vectors) |
+| 2 | `concatenated_1536d.parquet` | (~1,447,673 × 1536) | Concatenation of 1a and 1b |
+| 3 | `patent_vectors_50d.parquet` | (~1,447,673 × 50) | UMAP reduction of stage 2 |
 
-All files include `patent_id` column and binary-serialized embedding column.
+Row count note: ~1,519,401 dedup patents minus ~71K with post_deal_flag=1 yields ~1,447,673 patents for encoding.
+
+All embedding files include `patent_id` column and binary-serialized embedding column.

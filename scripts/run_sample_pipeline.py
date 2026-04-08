@@ -4,6 +4,9 @@ Usage:
     source venv/bin/activate
     python scripts/run_sample_pipeline.py
 
+Loads the pre-deduplicated file (source="dedup"), filters out post-deal patents,
+samples 1K patents, and runs the full encoding pipeline on the sample.
+
 Outputs checkpoint files to output/embeddings/sample_* for validation notebook.
 """
 
@@ -43,10 +46,27 @@ def main():
     # --- Stage 0: Load data ---
     print("\n[Stage 0] Loading data...")
     loader = PatentLoader(config)
-    pm = loader.load_patent_metadata(columns=["patent_id", "gvkey", "title", "abstract"])
+
+    # Load dedup file (unique patent_ids, for encoding)
+    pm = loader.load_patent_metadata(
+        columns=["patent_id", "title", "abstract", "post_deal_flag"],
+        source="dedup",
+    )
+    print(f"  Loaded {len(pm):,} dedup patents")
+
+    # Filter out post-deal patents
+    if "post_deal_flag" in pm.columns:
+        pre_filter = len(pm)
+        pm = pm[pm["post_deal_flag"] == 0].drop(columns=["post_deal_flag"]).reset_index(drop=True)
+        print(f"  Filtered post_deal_flag==1: {pre_filter:,} -> {len(pm):,} patents")
+
+    # Fill NaN titles/abstracts before encoding
+    pm["title"] = pm["title"].fillna("")
+    pm["abstract"] = pm["abstract"].fillna("")
+
     cn = loader.load_citation_network()
     ca = loader.load_cited_abstracts()
-    print(f"  Loaded {len(pm):,} patents, {len(cn):,} edges, {len(ca):,} cited abstracts")
+    print(f"  Loaded {len(cn):,} edges, {len(ca):,} cited abstracts")
 
     # --- Stage 0b: Sample 1K patents ---
     rng = np.random.RandomState(42)
@@ -136,9 +156,11 @@ def main():
     print(f"  UMAP output: {vectors_50d.shape}")
 
     # --- Save gvkey mapping for validation notebook ---
-    gvkey_map = pm_sample[["patent_id", "gvkey"]].to_parquet(
-        f"{OUTPUT_DIR}/sample_gvkey_map.parquet", index=False
-    )
+    # Load gvkey mapping from the full metadata file (has co-assignments)
+    pm_full = loader.load_patent_metadata(columns=["patent_id", "gvkey"], source="full")
+    gvkey_map = pm_full[pm_full["patent_id"].isin(sample_ids)].reset_index(drop=True)
+    gvkey_map.to_parquet(f"{OUTPUT_DIR}/sample_gvkey_map.parquet", index=False)
+    print(f"  Saved gvkey mapping: {len(gvkey_map):,} rows")
 
     elapsed = time.time() - t0
     print(f"\n{'=' * 60}")

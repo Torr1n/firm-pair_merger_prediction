@@ -52,7 +52,7 @@ class PatentLoader:
                     'dedup' for pre-deduplicated file (unique patent_ids for encoding).
         """
         key = "patent_metadata_dedup" if source == "dedup" else "patent_metadata"
-        required = ["patent_id"]
+        required = ["patent_id"] if source == "dedup" else ["patent_id", "title", "abstract"]
         if columns is not None:
             validation_cols = list(set(columns) | {"patent_id"})
         else:

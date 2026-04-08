@@ -10,8 +10,7 @@ import pyarrow.parquet as pq
 
 class CheckpointManager:
     def __init__(self, checkpoint_dir: str):
-        self.checkpoint_dir = Path(checkpoint_dir)
-        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
 
     def save_embeddings(
         self,
@@ -57,7 +56,6 @@ class CheckpointManager:
 
         table = pq.read_table(str(path))
         patent_ids = table["patent_id"].to_pylist()
-        embedding_dim = int(table.schema.metadata.get(b"embedding_dim", b"0"))
 
         embeddings = np.array(
             [np.frombuffer(b, dtype=np.float32) for b in table["embedding"].to_pylist()]
@@ -77,5 +75,5 @@ class CheckpointManager:
         try:
             pq.read_metadata(str(p))
             return True
-        except Exception:
+        except (pa.lib.ArrowInvalid, pa.lib.ArrowIOError):
             return False

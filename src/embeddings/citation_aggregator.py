@@ -46,6 +46,9 @@ class CitationAggregator:
 
         result = np.zeros((len(patent_ids), embedding_dim), dtype=np.float32)
 
+        # Performance: O(n_patents * avg_citations) with Python dict lookups.
+        # For 1.5M patents with median 6 citations, expect ~10-30 min.
+        # Vectorizable with pandas merge+groupby if this becomes a bottleneck.
         for i, pid in enumerate(patent_ids):
             if pid not in grouped.index:
                 continue  # zero vector (no citations)
@@ -69,24 +72,24 @@ class CitationAggregator:
         citation_lookup: dict[str, np.ndarray],
     ) -> dict:
         pid_set = set(patent_ids)
-        relevant_network = citation_network[citation_network["patent_id"].isin(pid_set)]
+        relevant = citation_network[citation_network["patent_id"].isin(pid_set)]
 
-        grouped = relevant_network.groupby("patent_id")["citation_id"].apply(list)
-        patents_with_citations = set(grouped.index) & pid_set
+        patents_with_citations = relevant["patent_id"].nunique()
+        zero_citation = len(patent_ids) - patents_with_citations
 
-        zero_citation = len(patent_ids) - len(patents_with_citations)
+        total_edges = len(relevant)
+        edges_with_emb = relevant["citation_id"].isin(citation_lookup).sum()
 
-        total_edges = len(relevant_network)
-        edges_with_emb = relevant_network["citation_id"].isin(citation_lookup).sum()
-
-        citation_counts = [len(grouped.get(pid, [])) for pid in patent_ids]
+        citation_counts = relevant["patent_id"].value_counts()
+        # Include zero-citation patents in the distribution
+        all_counts = pd.Series(0, index=patent_ids).add(citation_counts, fill_value=0)
 
         return {
             "total_patents": len(patent_ids),
             "zero_citation_patents": zero_citation,
             "zero_citation_pct": zero_citation / len(patent_ids) if patent_ids else 0,
-            "mean_citations_per_patent": float(np.mean(citation_counts)),
-            "median_citations_per_patent": float(np.median(citation_counts)),
+            "mean_citations_per_patent": float(all_counts.mean()),
+            "median_citations_per_patent": float(all_counts.median()),
             "total_edges": total_edges,
             "edges_with_embeddings": int(edges_with_emb),
             "edge_coverage_pct": int(edges_with_emb) / total_edges if total_edges > 0 else 0,
