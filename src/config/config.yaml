@@ -29,6 +29,24 @@ data:
   cited_abstracts: "data/cited_abstracts_techbio_v3.parquet"
   citation_network: "data/citation_network_techbio_v3.parquet"
 
+# --- Portfolio Construction (Week 2) ---
+portfolio:
+  min_patents: 5                    # Firms below this are excluded (ADR-005)
+  single_gaussian_max: 49           # Firms with min_patents..this get K=1 (ADR-005)
+  gmm_method: "bayesian"            # "bayesian" or "bic_sweep" (ADR-004)
+  k_max: 15                         # Operational default (ADR-004)
+  k_max_sweep: [10, 15, 20]         # Sensitivity sweep — produce artifacts at each value
+  covariance_type: "diag"           # "diag" per ADR-006
+  normalization: "raw"              # "raw", "l2", or "zscore" (ADR-007, pending EDA)
+  weight_pruning_threshold: 0.01    # Components below this weight are pruned
+  weight_concentration_prior: 1.0   # Dirichlet process γ — E[K]≈γ·log(n) (ADR-004, post-audit)
+  mean_precision_prior: 1.0         # κ₀: weakly informative mean shrinkage
+  degrees_of_freedom_prior: 52      # ν₀ = d+2 for finite posterior mean (audit recommendation)
+  random_state: 42
+  max_iter: 200
+  n_init: 5                         # Best of N initializations (up from 3 for VI stability)
+  checkpoint_every_n: 1000          # Save progress every N firms
+
 # --- Output Paths ---
 output:
   checkpoint_dir: "output/embeddings"
@@ -36,3 +54,9 @@ output:
   citation_embeddings: "output/embeddings/citation_embeddings.parquet"
   concatenated_vectors: "output/embeddings/concatenated_1536d.parquet"
   patent_vectors_50d: "output/embeddings/patent_vectors_50d.parquet"
+  gvkey_map: "output/embeddings/gvkey_map.parquet"
+
+output_portfolios:
+  checkpoint_dir: "output/portfolios"
+  firm_gmm_parameters_template: "output/portfolios/firm_gmm_parameters_k{k_max}.parquet"
+  excluded_firms_log: "output/portfolios/excluded_firms.csv"

@@ -6,8 +6,8 @@
 # Usage:
 #   cd infrastructure
 #   terraform init
-#   terraform plan -var="key_name=dev-environment-key" -var="ssh_cidr=$(curl -s ifconfig.me)/32"
-#   terraform apply -var="key_name=dev-environment-key" -var="ssh_cidr=$(curl -s ifconfig.me)/32"
+#   terraform plan -var="key_name=firm-pair-codex-20260406" -var="ssh_cidr=$(curl -s ifconfig.me)/32"
+#   terraform apply -var="key_name=firm-pair-codex-20260406" -var="ssh_cidr=$(curl -s ifconfig.me)/32"
 #
 # S3 access: After SSH-ing in, run `aws configure --profile torrin` with your
 # existing credentials. The bootstrap script pulls data using this profile.
@@ -56,10 +56,28 @@ variable "s3_prefix" {
   default     = "firm-pair-merger"
 }
 
+variable "data_version" {
+  description = "Versioned data sub-prefix under the project namespace."
+  type        = string
+  default     = "v3"
+}
+
 variable "instance_type" {
   description = "EC2 instance type"
   type        = string
   default     = "g5.8xlarge"
+}
+
+variable "subnet_id" {
+  description = "Subnet to launch into. Defaults to the subnet used in the successful EC2 dry-run."
+  type        = string
+  default     = "subnet-09cb64e90890545b1"
+}
+
+variable "repo_commit" {
+  description = "Exact git commit checked out during bootstrap for reproducible runs."
+  type        = string
+  default     = "c590f029c143c99a5eba300b341cef8a3197e84c"
 }
 
 # --- Data Sources ---
@@ -127,6 +145,7 @@ resource "aws_instance" "pipeline" {
   ami                    = data.aws_ami.deep_learning.id
   instance_type          = var.instance_type
   key_name               = var.key_name
+  subnet_id              = var.subnet_id
   vpc_security_group_ids = [aws_security_group.pipeline.id]
 
   root_block_device {
@@ -135,8 +154,10 @@ resource "aws_instance" "pipeline" {
   }
 
   user_data = templatefile("${path.module}/user_data.sh", {
-    s3_bucket = var.s3_bucket
-    s3_prefix = var.s3_prefix
+    s3_bucket    = var.s3_bucket
+    s3_prefix    = var.s3_prefix
+    data_version = var.data_version
+    repo_commit  = var.repo_commit
   })
 
   tags = {
@@ -164,5 +185,5 @@ output "ami_name" {
 }
 
 output "post_ssh_setup" {
-  value = "After SSH: aws configure --profile torrin (enter your access key/secret), then run the pipeline"
+  value = "After SSH: aws configure --profile torrin (enter your access key/secret), pull data from s3://${var.s3_bucket}/${var.s3_prefix}/data/${var.data_version}/, then run the pipeline"
 }

@@ -1,9 +1,9 @@
 # ADR-002: Citation Embedding Aggregation Strategy
 
-**Status**: Proposed  
+**Status**: Accepted  
 **Date**: 2026-04-01  
 **Authors**: Torrin Pataki, Claude Code  
-**Reviewers**: Codex (pending)
+**Reviewers**: Codex (approved 2026-04-02)
 
 ## Context
 

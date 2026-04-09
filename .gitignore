@@ -24,6 +24,14 @@ output/
 .vscode/
 .idea/
 
+# Infrastructure (Terraform state contains sensitive instance details)
+infrastructure/.terraform/
+infrastructure/terraform.tfstate
+infrastructure/terraform.tfstate.backup
+
+# Notebook images (generated artifacts)
+notebooks/*.png
+
 # OS
 .DS_Store
 Thumbs.db

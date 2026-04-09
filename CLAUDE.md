@@ -52,6 +52,10 @@ Configuration lives in `src/config/config.yaml`. Important settings:
 - `embedding.batch_size`: Encoding batch size (256 GPU, 64 CPU)
 - `umap.n_components`: Target dimensionality (default: 50)
 - `citation_aggregation.method`: How to aggregate citation embeddings (default: mean_pooling)
+- `portfolio.gmm_method`: K selection method — "bayesian" (Dirichlet process) or "bic_sweep"
+- `portfolio.k_max`: Maximum GMM components per firm (default: 10)
+- `portfolio.min_patents`: Minimum patents to include firm (default: 5)
+- `portfolio.covariance_type`: "diag" (diagonal covariance, per ADR-006)
 
 ## Module Structure (src/)
 
@@ -98,15 +102,18 @@ Primary implementation agent. Follows spec-driven, test-driven workflow. Halts a
 - Before any cloud deployment
 - When making decisions not covered by existing ADRs
 
-## Data Files
+## Data Files (v3)
 
-Three parquet files in `data/` (gitignored — contact Amie Le Hoang for access):
+Four parquet files in `data/` (gitignored — contact Amie Le Hoang for access). v3 data (2026-04-07): tech + biotech, clean scope, post_deal_flag, pre-deduplicated encoding file.
 
 | File | Description | Rows | Key Columns |
 |------|-------------|------|-------------|
-| `patent_metadata.parquet` | Core patents owned by Compustat tech firms | ~2.7M | gvkey, patent_id, title, abstract |
-| `cited_abstracts.parquet` | Abstracts of every patent cited by core sample | ~3.7M | patent_id (cited ID), abstract |
-| `citation_network.parquet` | Citation edges linking the two text datasets | ~46M | patent_id (firm's patent), citation_id |
+| `firm_patents_text_metadata_techbio_v3.parquet` | Full patent metadata with co-assignments | 1,604,583 | gvkey, patent_id, post_deal_flag, title, abstract |
+| `firm_patents_dedup_techbio_v3.parquet` | Deduplicated for encoding (unique patent_ids) | 1,519,401 | patent_id, title, abstract |
+| `cited_abstracts_techbio_v3.parquet` | Abstracts of every patent cited by core sample | 2,623,183 | patent_id (cited ID), abstract |
+| `citation_network_techbio_v3.parquet` | Citation edges linking the two text datasets | 35,424,315 | patent_id (firm's patent), citation_id |
+
+**Two-file pattern**: Use dedup file for encoding (unique patents), full file for portfolio construction (co-assignments preserved). Filter `post_deal_flag == 0` for clean pre-acquisition features. 15,814 unique firms.
 
 ## Environment Constraint
 

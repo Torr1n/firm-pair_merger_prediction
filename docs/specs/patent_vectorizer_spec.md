@@ -3,7 +3,7 @@
 **Status**: Accepted (Codex-approved)  
 **Date**: 2026-04-07  
 **Authors**: Torrin Pataki, Claude Code  
-**Reviewers**: Codex (pending)  
+**Reviewers**: Codex (approved 2026-04-02)  
 **ADR Dependencies**: ADR-001 (embedding model), ADR-002 (citation aggregation)
 
 ---
