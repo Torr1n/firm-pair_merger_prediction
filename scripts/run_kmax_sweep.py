@@ -36,6 +36,7 @@ Checkpoint behavior:
 
 import argparse
 import json
+import os
 import sys
 import time
 import warnings
@@ -178,15 +179,30 @@ def compute_global_priors(vectors: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 # ---------------------------------------------------------------------------
 
 def fit_single_gaussian(gvkey: str, X: np.ndarray) -> dict:
-    """Fit K=1 Gaussian for single-Gaussian tier firms (5-49 patents)."""
+    """Fit K=1 Gaussian for single-Gaussian tier firms (5-49 patents).
+
+    Numerical stability:
+        sklearn computes diagonal variance as E[X²] - mean² + reg_covar, which is
+        subject to catastrophic cancellation when float32 inputs have large means
+        relative to small per-dim variance. The 50D UMAP outputs have mean range
+        [3, 10] and per-dim variance as low as 0.02 — a regime where float32
+        cancellation produces tiny negative variances, crashing _compute_precision_cholesky.
+
+        Empirical scan (2026-04-09): 342 of 6,304 single-Gaussian firms failed in
+        float32 with reg_covar=1e-6. Float64 fixes 100% of cases independently;
+        reg_covar=1e-4 also fixes 100% independently. We apply both as defense in
+        depth. Bumped reg_covar is harmless — it's still 1/1000th of the smallest
+        true per-dim variance observed in the data.
+    """
+    X64 = np.asarray(X, dtype=np.float64)
     gm = GaussianMixture(
         n_components=1,
         covariance_type="diag",
         max_iter=200,
         random_state=42,
-        reg_covar=1e-6,
+        reg_covar=1e-4,
     )
-    gm.fit(X)
+    gm.fit(X64)
     return {
         "gvkey": gvkey,
         "n_patents": len(X),
@@ -220,30 +236,39 @@ def fit_bayesian_gmm(
         - covariance_prior = global_var (empirical Bayes from pooled patents)
 
     Components with weight < 0.01 are pruned; remaining weights renormalized.
+
+    Numerical stability: cast X and priors to float64 to avoid float32
+    cancellation issues in sklearn's variance computation (see fit_single_gaussian
+    docstring for details). reg_covar bumped to 1e-4 as defense in depth.
     """
     portfolio_cfg = config["portfolio"]
 
+    # Cast inputs to float64 (avoids float32 cancellation in sklearn variance)
+    X64 = np.asarray(X, dtype=np.float64)
+    mean_prior_64 = np.asarray(global_mean, dtype=np.float64)
+    covariance_prior_64 = np.asarray(global_var, dtype=np.float64)
+
     # Guard: K_max cannot exceed n_samples - 1 (sklearn constraint)
-    actual_kmax = min(k_max, len(X) - 1)
+    actual_kmax = min(k_max, len(X64) - 1)
 
     bgm = BayesianGaussianMixture(
         n_components=actual_kmax,
         covariance_type="diag",
         weight_concentration_prior_type="dirichlet_process",
         weight_concentration_prior=portfolio_cfg["weight_concentration_prior"],
-        mean_prior=global_mean,
+        mean_prior=mean_prior_64,
         mean_precision_prior=portfolio_cfg["mean_precision_prior"],
         degrees_of_freedom_prior=portfolio_cfg["degrees_of_freedom_prior"],
-        covariance_prior=global_var,
+        covariance_prior=covariance_prior_64,
         max_iter=portfolio_cfg["max_iter"],
         n_init=portfolio_cfg["n_init"],
         random_state=portfolio_cfg["random_state"],
-        reg_covar=1e-6,
+        reg_covar=1e-4,
     )
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")  # Suppress convergence warnings
-        bgm.fit(X)
+        bgm.fit(X64)
 
     # Prune components with weight below threshold
     weights = bgm.weights_
@@ -703,7 +728,7 @@ def main():
     args = parser.parse_args()
 
     t_start = time.time()
-    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    run_id = os.environ.get("RUN_ID", datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
 
     Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
