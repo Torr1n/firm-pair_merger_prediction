@@ -139,8 +139,11 @@ The script reports progress every 500 firms (during fitting) and every 100 rows 
     [500/7949] 120s elapsed, 4.2 firms/s, ETA 1786s
     ...
 [Stage 5] Computing pairwise Bhattacharyya Coefficients...
-  [K_max=10] Computing BC matrix (GMM-tier firms only)...
-    BC [100/1645 rows] 134,450/1,352,490 pairs (9.9%) 45s elapsed, ETA 410s
+  Scope: ALL non-excluded firms (single-Gaussian + GMM-tier)
+  Computing SG-vs-SG block (6304 firms, K_max-invariant)...
+    ...
+  [K_max=10] Computing BC matrix (all non-excluded firms)...
+    BC k10 [250/7949 rows] computed=XXX cached=XXX (X.X%) XXXs elapsed
     ...
 [Stage 6] Computing convergence metrics...
   Comparing K_max=10 vs K_max=15...
@@ -184,7 +187,7 @@ The existing `scripts/watch_pipeline_and_shutdown.sh` can be adapted for this sw
 - Success detection: `grep -q "Sweep complete"` in the log
 - S3 sync target: `s3://ubc-torrin/firm-pair-merger/week2/kmax_sweep/`
 
-Alternatively, since estimated runtime is 3-6 hours (well within the 8-hour default timeout), the watcher can be used as-is with adjusted paths.
+Since estimated runtime is 8-14 hours, increase `MAX_RUNTIME_SECONDS` from the default 28800 (8 hr) to 57600 (16 hr) to avoid premature timeout.
 
 ---
 
@@ -196,7 +199,7 @@ Alternatively, since estimated runtime is 3-6 hours (well within the 8-hour defa
 | sklearn convergence warnings | Expected | Suppressed with `warnings.catch_warnings()`. Non-convergence is tracked in `converged` field. |
 | K_max > n_patents crash | Guarded | `actual_kmax = min(k_max, len(X) - 1)` prevents sklearn ValueError. |
 | Interrupted mid-run | Guarded | Per-K_max checkpointing. Re-run resumes from last completed stage. |
-| Very slow BC computation | Mitigated | Vectorized with numpy broadcasting (~5 min per K_max, not ~90 min). |
+| Very slow BC computation | Mitigated | Vectorized with numpy broadcasting. SG-vs-SG block (~19.9M pairs) computed once; per-K_max work is ~11.7M GMM-involved pairs. |
 
 ---
 

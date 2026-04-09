@@ -1,18 +1,20 @@
 """K_max convergence sweep for firm GMM portfolio fitting.
 
-Fits Bayesian GMMs for all GMM-tier firms (50+ patents) at K_max ∈ {10, 15, 20, 25, 30},
-computes pairwise Bhattacharyya Coefficients, and measures BC ranking convergence
-across adjacent K_max values.
+Fits Bayesian GMMs for all non-excluded firms (~7,949: single-Gaussian + GMM-tier)
+at K_max values from config (default {10, 15, 20, 25, 30}), computes pairwise
+Bhattacharyya Coefficients between ALL non-excluded firm pairs (~31.6M per K_max),
+and measures BC ranking convergence across adjacent K_max values.
 
-Why this matters:
-    The design phase (ADR-004) found BC rankings moderately stable (Spearman ρ ≈ 0.80)
-    but top-tail unstable (top-50 overlap 22-48%). This sweep determines whether rankings
-    converge by K_max=25-30, resolving whether K_max is a tuning parameter or a
-    methodological limitation requiring model-family escalation.
+BC scope: All non-excluded firms are included. Single-Gaussian firms (K=1) are
+K_max-invariant, but they participate in the ranking universe because the GMM-tier
+firm they are compared against changes with K_max. The SG-vs-SG block is computed
+once and reused across K_max values for efficiency.
 
-Decision rule (from Codex review):
-    - If Spearman ρ > 0.95 AND top-50 overlap > 80% between adjacent K_max → converged
-    - If convergence does not emerge by K_max=30 → escalate (reopen ADR-004)
+Decision rule (persistent stability, from Codex review):
+    K* = smallest K_max such that ALL subsequent adjacent comparisons pass:
+    - Spearman ρ > 0.95 AND top-50 overlap > 80%
+    A single passing transition is not enough if later transitions destabilize.
+    If convergence does not emerge by the largest K_max → escalate (reopen ADR-004).
 
 Usage (on AWS c5.4xlarge or equivalent CPU instance):
     source venv/bin/activate
@@ -27,8 +29,9 @@ After completion:
 
 Checkpoint behavior:
     - GMM results are saved per K_max value after all firms are fitted at that K_max
-    - If interrupted, re-run to resume from the last completed K_max
-    - BC matrices and convergence metrics are computed after all K_max values are fitted
+    - SG-vs-SG BC block is saved once and reused across all K_max values
+    - Full BC matrices are saved per K_max after computation
+    - If interrupted, re-run to resume from the last completed stage
 """
 
 import argparse
