@@ -56,7 +56,6 @@ from src.config import load_config
 # ---------------------------------------------------------------------------
 
 OUTPUT_DIR = "output/kmax_sweep"
-K_MAX_VALUES = [10, 15, 20, 25, 30]
 WEIGHT_PRUNE_THRESHOLD = 0.01  # Components below this weight are pruned
 
 
@@ -111,7 +110,7 @@ def group_and_classify(
     pid_to_idx: dict,
     min_patents: int = 5,
     single_gaussian_max: int = 49,
-) -> tuple[dict, dict, list]:
+) -> tuple[dict, dict, list[tuple[str, int]]]:
     """Group patent vectors by firm and classify into tiers.
 
     Tiers (ADR-005):
@@ -122,14 +121,14 @@ def group_and_classify(
     Returns:
         firm_vectors: dict[gvkey -> (n_patents, 50) array]
         tier_assignments: dict[gvkey -> tier_str] (only non-excluded firms)
-        excluded_gvkeys: list of excluded firm identifiers
+        excluded_firms: list of (gvkey, n_patents) tuples for excluded firms
     """
     # Group patent_ids by gvkey (co-assigned patents appear in each firm)
     grouped = gvkey_map.groupby("gvkey")["patent_id"].apply(list)
 
     firm_vectors = {}
     tier_assignments = {}
-    excluded_gvkeys = []
+    excluded_firms = []
 
     for gvkey, patent_ids in grouped.items():
         # Look up vector indices; skip patents not in the vector set
@@ -137,7 +136,7 @@ def group_and_classify(
         n = len(indices)
 
         if n < min_patents:
-            excluded_gvkeys.append(gvkey)
+            excluded_firms.append((gvkey, n))
             continue
 
         firm_vectors[gvkey] = vectors[indices]
@@ -147,7 +146,7 @@ def group_and_classify(
         else:
             tier_assignments[gvkey] = "gmm"
 
-    return firm_vectors, tier_assignments, excluded_gvkeys
+    return firm_vectors, tier_assignments, excluded_firms
 
 
 # ---------------------------------------------------------------------------
@@ -462,49 +461,105 @@ def bc_mixture(gmm_a: dict, gmm_b: dict) -> float:
     return float(np.sum(weight_grid * bc_grid))
 
 
-def compute_bc_matrix(results: list[dict], gmm_only: bool = True) -> tuple[list[str], np.ndarray]:
-    """Compute pairwise BC matrix for all firms.
+def compute_bc_matrix(
+    results: list[dict],
+    label: str = "all",
+    sg_block: np.ndarray | None = None,
+    sg_gvkeys: list[str] | None = None,
+) -> tuple[list[str], np.ndarray]:
+    """Compute pairwise BC matrix for all non-excluded firms.
+
+    Optimization: single-Gaussian (K=1) firms are K_max-invariant. The BC
+    between two SG firms never changes across K_max values. If sg_block and
+    sg_gvkeys are provided, the SG-vs-SG block is copied from the precomputed
+    cache rather than recomputed.
 
     Args:
-        results: list of GMM result dicts
-        gmm_only: if True, only include GMM-tier firms (50+ patents)
+        results: list of GMM result dicts (all non-excluded firms)
+        label: label for progress messages
+        sg_block: precomputed (N_sg, N_sg) BC matrix for SG-vs-SG pairs
+        sg_gvkeys: ordered gvkeys corresponding to sg_block rows/cols
 
     Returns:
         gvkeys: ordered list of firm identifiers
         bc_matrix: (N, N) symmetric matrix of BC values
     """
-    if gmm_only:
-        firms = [r for r in results if r["tier"] == "gmm"]
-    else:
-        firms = results
-
-    n = len(firms)
-    gvkeys = [f["gvkey"] for f in firms]
+    n = len(results)
+    gvkeys = [r["gvkey"] for r in results]
     bc_matrix = np.zeros((n, n), dtype=np.float64)
 
-    # Fill upper triangle + diagonal
+    # Build index for sg_block reuse
+    sg_idx_map = {}
+    if sg_block is not None and sg_gvkeys is not None:
+        sg_idx_map = {gk: idx for idx, gk in enumerate(sg_gvkeys)}
+
+    # Classify each result by tier for skip logic
+    is_sg = [r["tier"] == "single_gaussian" for r in results]
+
+    total_pairs = n * (n - 1) // 2
+    computed = 0
+    skipped = 0
+    t0 = time.time()
+
+    for i in range(n):
+        bc_matrix[i, i] = 1.0
+        for j in range(i + 1, n):
+            # Reuse precomputed SG-vs-SG block if both firms are single-Gaussian
+            if is_sg[i] and is_sg[j] and gvkeys[i] in sg_idx_map and gvkeys[j] in sg_idx_map:
+                bc_val = sg_block[sg_idx_map[gvkeys[i]], sg_idx_map[gvkeys[j]]]
+                skipped += 1
+            else:
+                bc_val = bc_mixture(results[i], results[j])
+                computed += 1
+
+            bc_matrix[i, j] = bc_val
+            bc_matrix[j, i] = bc_val
+
+        # Progress every 250 firms
+        done = computed + skipped
+        if (i + 1) % 250 == 0 or (i + 1) == n:
+            elapsed = time.time() - t0
+            pct = done / total_pairs * 100 if total_pairs > 0 else 100
+            rate = computed / elapsed if elapsed > 0 else 0
+            eta_computed = total_pairs - done
+            # Rough ETA: remaining pairs that need computation (not skipped)
+            print(f"    BC {label} [{i+1}/{n} rows] computed={computed:,} "
+                  f"cached={skipped:,} ({pct:.1f}%) {elapsed:.0f}s elapsed")
+
+    return gvkeys, bc_matrix
+
+
+def compute_sg_block(results: list[dict]) -> tuple[list[str], np.ndarray]:
+    """Precompute the SG-vs-SG BC block (K_max-invariant).
+
+    Single-Gaussian firms have K=1, so their BC values never change
+    across K_max settings. Computing this block once and reusing it
+    across all K_max values avoids redundant work.
+    """
+    sg_firms = [r for r in results if r["tier"] == "single_gaussian"]
+    n = len(sg_firms)
+    gvkeys = [r["gvkey"] for r in sg_firms]
+    block = np.zeros((n, n), dtype=np.float64)
+
     total_pairs = n * (n - 1) // 2
     computed = 0
     t0 = time.time()
 
     for i in range(n):
-        bc_matrix[i, i] = 1.0  # Self-overlap is 1
+        block[i, i] = 1.0
         for j in range(i + 1, n):
-            bc_val = bc_mixture(firms[i], firms[j])
-            bc_matrix[i, j] = bc_val
-            bc_matrix[j, i] = bc_val
+            bc_val = bc_mixture(sg_firms[i], sg_firms[j])
+            block[i, j] = bc_val
+            block[j, i] = bc_val
             computed += 1
 
-        # Progress every 100 firms (row completions)
-        if (i + 1) % 100 == 0 or (i + 1) == n:
+        if (i + 1) % 500 == 0 or (i + 1) == n:
             elapsed = time.time() - t0
             pct = computed / total_pairs * 100 if total_pairs > 0 else 100
-            rate = computed / elapsed if elapsed > 0 else 0
-            eta = (total_pairs - computed) / rate if rate > 0 else 0
-            print(f"    BC [{i+1}/{n} rows] {computed:,}/{total_pairs:,} pairs "
-                  f"({pct:.1f}%) {elapsed:.0f}s elapsed, ETA {eta:.0f}s")
+            print(f"    SG block [{i+1}/{n}] {computed:,}/{total_pairs:,} pairs "
+                  f"({pct:.1f}%) {elapsed:.0f}s")
 
-    return gvkeys, bc_matrix
+    return gvkeys, block
 
 
 # ---------------------------------------------------------------------------
@@ -649,13 +704,18 @@ def main():
 
     Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
+    config = load_config()
+    portfolio_cfg = config["portfolio"]
+
+    # Read K_max sweep values from config (Minor #1: no hardcoded values)
+    k_max_values = sorted(portfolio_cfg["k_max_sweep"])
+
     print("=" * 70)
     print(f"K_max Convergence Sweep — Run {run_id}")
-    print(f"K_max values: {K_MAX_VALUES}")
+    print(f"K_max values: {k_max_values}")
     print("=" * 70)
 
-    config = load_config()
-    write_status("running", run_id, {"k_max_values": K_MAX_VALUES})
+    write_status("running", run_id, {"k_max_values": k_max_values})
 
     # ---- Stage 1: Load data ----
     print("\n[Stage 1] Loading data...")
@@ -663,8 +723,7 @@ def main():
 
     # ---- Stage 2: Group firms and classify tiers ----
     print("\n[Stage 2] Grouping firms and classifying tiers (ADR-005)...")
-    portfolio_cfg = config["portfolio"]
-    firm_vectors, tier_assignments, excluded_gvkeys = group_and_classify(
+    firm_vectors, tier_assignments, excluded_firms = group_and_classify(
         vectors, gvkey_map, pid_to_idx,
         min_patents=portfolio_cfg["min_patents"],
         single_gaussian_max=portfolio_cfg["single_gaussian_max"],
@@ -673,9 +732,11 @@ def main():
     n_gmm = sum(1 for t in tier_assignments.values() if t == "gmm")
     n_sg = sum(1 for t in tier_assignments.values() if t == "single_gaussian")
     n_gmm_patents = sum(len(firm_vectors[gk]) for gk, t in tier_assignments.items() if t == "gmm")
-    print(f"  Excluded: {len(excluded_gvkeys):,} firms")
+    n_all = n_gmm + n_sg
+    print(f"  Excluded: {len(excluded_firms):,} firms")
     print(f"  Single-Gaussian: {n_sg:,} firms")
     print(f"  GMM-tier: {n_gmm:,} firms ({n_gmm_patents:,} patents)")
+    print(f"  Total non-excluded: {n_all:,} firms (all included in BC analysis)")
 
     # ---- Stage 3: Compute global priors ----
     print("\n[Stage 3] Computing global empirical Bayes priors...")
@@ -690,7 +751,7 @@ def main():
     # ---- Stage 4: Fit GMMs at each K_max ----
     all_results = {}  # k_max -> list[dict]
 
-    for k_idx, k_max in enumerate(K_MAX_VALUES):
+    for k_idx, k_max in enumerate(k_max_values):
         print(f"\n[Stage 4.{k_idx+1}] Fitting GMMs at K_max={k_max}...")
 
         # Check for checkpoint
@@ -724,20 +785,44 @@ def main():
 
         all_results[k_max] = results
         write_status("running", run_id, {
-            "k_max_values": K_MAX_VALUES,
-            "completed_k_max": [k for k in K_MAX_VALUES[:k_idx+1]],
+            "k_max_values": k_max_values,
+            "completed_k_max": k_max_values[:k_idx+1],
             "current_k_summary": k_summary,
         })
 
     # ---- Stage 5: Compute pairwise BC at each K_max ----
+    # Primary analysis: ALL non-excluded firms (Codex Major #1)
+    # Single-Gaussian firms are K_max-invariant, so we precompute their
+    # mutual BC block once and reuse it across all K_max values.
     print("\n[Stage 5] Computing pairwise Bhattacharyya Coefficients...")
+    print("  Scope: ALL non-excluded firms (single-Gaussian + GMM-tier)")
 
+    # 5a: Precompute SG-vs-SG block (K_max-invariant)
+    sg_ckpt = f"{OUTPUT_DIR}/bc_block_sg_vs_sg.npz"
+    if Path(sg_ckpt).exists():
+        print("\n  Loading cached SG-vs-SG block...")
+        sg_data = np.load(sg_ckpt, allow_pickle=True)
+        sg_gvkeys = sg_data["gvkeys"].tolist()
+        sg_block = sg_data["bc_matrix"]
+        print(f"    SG block: {sg_block.shape} ({len(sg_gvkeys)} firms)")
+    else:
+        # Use results from any K_max (SG firms are identical across K_max)
+        first_k = k_max_values[0]
+        print(f"\n  Computing SG-vs-SG block ({n_sg} firms, K_max-invariant)...")
+        t_sg = time.time()
+        sg_gvkeys, sg_block = compute_sg_block(all_results[first_k])
+        elapsed_sg = time.time() - t_sg
+        print(f"    SG block: {sg_block.shape}, {elapsed_sg:.0f}s ({elapsed_sg/60:.1f} min)")
+        np.savez_compressed(sg_ckpt, gvkeys=np.array(sg_gvkeys), bc_matrix=sg_block)
+        print(f"    Cached to {sg_ckpt}")
+
+    # 5b: Full BC matrices per K_max (reusing SG block)
     bc_matrices = {}  # k_max -> (gvkeys, bc_matrix)
 
-    for k_max in K_MAX_VALUES:
-        print(f"\n  [K_max={k_max}] Computing BC matrix (GMM-tier firms only)...")
+    for k_max in k_max_values:
+        print(f"\n  [K_max={k_max}] Computing BC matrix (all non-excluded firms)...")
 
-        bc_ckpt = f"{OUTPUT_DIR}/bc_matrix_k{k_max}.npz"
+        bc_ckpt = f"{OUTPUT_DIR}/bc_matrix_all_k{k_max}.npz"
         if Path(bc_ckpt).exists():
             print(f"    Checkpoint found at {bc_ckpt}, loading...")
             data = np.load(bc_ckpt, allow_pickle=True)
@@ -746,11 +831,15 @@ def main():
             continue
 
         t_bc = time.time()
-        gvkeys, bc_matrix = compute_bc_matrix(all_results[k_max], gmm_only=True)
+        gvkeys, bc_matrix = compute_bc_matrix(
+            all_results[k_max],
+            label=f"k{k_max}",
+            sg_block=sg_block,
+            sg_gvkeys=sg_gvkeys,
+        )
         elapsed_bc = time.time() - t_bc
         print(f"    BC matrix: {bc_matrix.shape}, {elapsed_bc:.0f}s ({elapsed_bc/60:.1f} min)")
 
-        # Save checkpoint
         np.savez_compressed(bc_ckpt, gvkeys=np.array(gvkeys), bc_matrix=bc_matrix)
         print(f"    Saved to {bc_ckpt}")
         bc_matrices[k_max] = (gvkeys, bc_matrix)
@@ -760,7 +849,9 @@ def main():
 
     convergence_results = []
     sorted_kmax = sorted(bc_matrices.keys())
+    step = sorted_kmax[1] - sorted_kmax[0] if len(sorted_kmax) > 1 else 5
 
+    # Adjacent comparisons
     for i in range(len(sorted_kmax) - 1):
         k_a = sorted_kmax[i]
         k_b = sorted_kmax[i + 1]
@@ -780,16 +871,16 @@ def main():
         print(f"    Mean NN-5 overlap = {metrics['mean_nn5_overlap_pct']:.1f}%")
         print(f"    P10 NN-5 overlap  = {metrics['p10_nn5_overlap_pct']:.1f}%")
 
-    # Also compute non-adjacent comparisons (e.g., K=10 vs K=30) for full picture
+    # Non-adjacent comparisons for full picture
     print("\n  Non-adjacent comparisons...")
-    non_adjacent_pairs = [
-        (sorted_kmax[0], sorted_kmax[-1]),    # min vs max
-        (sorted_kmax[0], sorted_kmax[2]),     # K=10 vs K=20
-        (sorted_kmax[1], sorted_kmax[-1]),    # K=15 vs K=30
-    ]
+    non_adjacent_pairs = []
+    if len(sorted_kmax) >= 3:
+        non_adjacent_pairs.append((sorted_kmax[0], sorted_kmax[-1]))   # min vs max
+        non_adjacent_pairs.append((sorted_kmax[0], sorted_kmax[2]))    # e.g. K=10 vs K=20
+    if len(sorted_kmax) >= 4:
+        non_adjacent_pairs.append((sorted_kmax[1], sorted_kmax[-1]))   # e.g. K=15 vs K=30
+
     for k_a, k_b in non_adjacent_pairs:
-        if k_a == k_b:
-            continue
         gvkeys_a, bc_a = bc_matrices[k_a]
         gvkeys_b, bc_b = bc_matrices[k_b]
         metrics = compute_convergence_metrics(gvkeys_a, bc_a, gvkeys_b, bc_b, k_a, k_b)
@@ -801,7 +892,7 @@ def main():
     print("\n[Stage 7] Effective K summary across K_max values...")
 
     k_summaries = {}
-    for k_max in K_MAX_VALUES:
+    for k_max in k_max_values:
         k_summaries[k_max] = compute_effective_k_summary(all_results[k_max], k_max)
         s = k_summaries[k_max]
         print(f"  K_max={k_max}: mean_K={s['mean_k']}, median_K={s['median_k']}, "
@@ -810,33 +901,50 @@ def main():
     # ---- Stage 8: Save convergence summary ----
     print("\n[Stage 8] Saving convergence summary...")
 
-    # Determine convergence verdict
-    # Check adjacent pairs for the decision rule: ρ > 0.95 AND top-50 > 80%
+    # Determine convergence verdict (Major #2: persistent stability)
+    # K* = smallest K_max such that ALL subsequent adjacent comparisons pass.
+    # "Converged at K*" means: the transition INTO K* passes, and all transitions
+    # AFTER K* also pass. This ensures "raising K_max further stops mattering."
+    adjacent_results = [m for m in convergence_results
+                        if m["k_max_b"] - m["k_max_a"] == step]
+    # Sort by k_max_a to ensure correct order
+    adjacent_results.sort(key=lambda m: m["k_max_a"])
+
+    def passes_threshold(m: dict) -> bool:
+        return (m["spearman_rho"] > 0.95
+                and m.get("top_50_overlap_pct", 0) > 80)
+
     converged = False
     converged_at = None
-    adjacent_results = [m for m in convergence_results
-                        if m["k_max_b"] == m["k_max_a"] + 5]  # Only adjacent (step=5)
 
-    for m in adjacent_results:
-        top50 = m.get("top_50_overlap_pct", 0)
-        if m["spearman_rho"] > 0.95 and top50 > 80:
+    # Walk from the earliest adjacent pair forward.
+    # For each candidate K*, check that this pair AND all subsequent pairs pass.
+    for start_idx in range(len(adjacent_results)):
+        # K* would be adjacent_results[start_idx]["k_max_b"] (the "to" value)
+        all_pass = all(passes_threshold(adjacent_results[j])
+                       for j in range(start_idx, len(adjacent_results)))
+        if all_pass:
             converged = True
-            converged_at = m["k_max_b"]
+            converged_at = adjacent_results[start_idx]["k_max_b"]
             break
 
     summary = {
         "run_id": run_id,
-        "k_max_values": K_MAX_VALUES,
+        "k_max_values": k_max_values,
+        "bc_scope": "all_non_excluded",
         "convergence_verdict": "converged" if converged else "not_converged",
         "converged_at_kmax": converged_at,
         "decision_rule": {
             "spearman_threshold": 0.95,
             "top_50_overlap_threshold_pct": 80,
+            "method": "persistent_stability",
+            "definition": "K* = smallest K_max such that all subsequent adjacent "
+                          "comparisons from K* onward pass both thresholds",
         },
         "adjacent_comparisons": [m for m in convergence_results
-                                  if m["k_max_b"] - m["k_max_a"] == 5],
+                                  if m["k_max_b"] - m["k_max_a"] == step],
         "non_adjacent_comparisons": [m for m in convergence_results
-                                      if m["k_max_b"] - m["k_max_a"] != 5],
+                                      if m["k_max_b"] - m["k_max_a"] != step],
         "effective_k_summaries": {str(k): s for k, s in k_summaries.items()},
         "timing": {},
     }
@@ -853,9 +961,14 @@ def main():
         json.dump(summary, f, indent=2)
     print(f"  Saved to {summary_path}")
 
-    # Save excluded firms log
+    # Save excluded firms log (Minor #2: spec-compliant schema)
     excluded_path = f"{OUTPUT_DIR}/excluded_firms.csv"
-    pd.DataFrame({"gvkey": excluded_gvkeys}).to_csv(excluded_path, index=False)
+    pd.DataFrame({
+        "gvkey": [gk for gk, _ in excluded_firms],
+        "n_patents": [n for _, n in excluded_firms],
+        "reason": [f"below_min_patents_{portfolio_cfg['min_patents']}"
+                   for _ in excluded_firms],
+    }).to_csv(excluded_path, index=False)
     print(f"  Excluded firms: {excluded_path}")
 
     # ---- Final report ----
@@ -864,30 +977,33 @@ def main():
     print(f"{'=' * 70}")
     print(f"  Total time: {elapsed_total:.0f}s ({elapsed_total/60:.1f} min, "
           f"{elapsed_total/3600:.2f} hr)")
-    print(f"  K_max values tested: {K_MAX_VALUES}")
+    print(f"  K_max values tested: {k_max_values}")
     print(f"  Firms fitted: {len(tier_assignments):,} "
           f"(GMM: {n_gmm:,}, single-Gaussian: {n_sg:,})")
-    print(f"  Excluded: {len(excluded_gvkeys):,}")
+    print(f"  BC scope: all {n_all:,} non-excluded firms")
+    print(f"  Excluded: {len(excluded_firms):,}")
     print()
 
     if converged:
         print(f"  VERDICT: CONVERGED at K_max={converged_at}")
+        print(f"  (Persistent stability: all adjacent pairs from K_max={converged_at} onward pass)")
         print(f"  Recommendation: Adopt K_max={converged_at} as production default")
     else:
-        print(f"  VERDICT: NOT CONVERGED by K_max={K_MAX_VALUES[-1]}")
+        print(f"  VERDICT: NOT CONVERGED by K_max={k_max_values[-1]}")
         print(f"  Action: Escalate per Codex trigger framework (reopen ADR-004)")
 
     print()
     print("Adjacent comparisons:")
     for m in adjacent_results:
+        marker = " *" if passes_threshold(m) else ""
         print(f"  K={m['k_max_a']} vs K={m['k_max_b']}: "
               f"ρ={m['spearman_rho']:.4f}, "
               f"top-50={m.get('top_50_overlap_pct', 'N/A')}%, "
-              f"NN-5={m['mean_nn5_overlap_pct']:.1f}%")
+              f"NN-5={m['mean_nn5_overlap_pct']:.1f}%{marker}")
 
     print()
     print("Effective K progression:")
-    for k_max in K_MAX_VALUES:
+    for k_max in k_max_values:
         s = k_summaries[k_max]
         print(f"  K_max={k_max}: mean={s['mean_k']}, "
               f"p90={s['p90_k']}, ceiling={s['pct_at_ceiling']}%")

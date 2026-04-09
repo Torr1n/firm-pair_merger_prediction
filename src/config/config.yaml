@@ -35,7 +35,7 @@ portfolio:
   single_gaussian_max: 49           # Firms with min_patents..this get K=1 (ADR-005)
   gmm_method: "bayesian"            # "bayesian" or "bic_sweep" (ADR-004)
   k_max: 15                         # Operational default (ADR-004)
-  k_max_sweep: [10, 15, 20]         # Sensitivity sweep — produce artifacts at each value
+  k_max_sweep: [10, 15, 20, 25, 30]  # Convergence sweep — produce artifacts at each value
   covariance_type: "diag"           # "diag" per ADR-006
   normalization: "raw"              # "raw", "l2", or "zscore" (ADR-007, pending EDA)
   weight_pruning_threshold: 0.01    # Components below this weight are pruned

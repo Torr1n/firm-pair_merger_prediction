@@ -9,9 +9,13 @@
 
 ## What This Does
 
-Fits Bayesian GMMs for all 1,645 GMM-tier firms (50+ patents) at K_max values {10, 15, 20, 25, 30}, computes pairwise Bhattacharyya Coefficients between all ~1.35M firm pairs at each K_max, and measures whether BC rankings converge as K_max increases.
+Fits Bayesian GMMs for all ~7,949 non-excluded firms (single-Gaussian + GMM-tier) at K_max values {10, 15, 20, 25, 30}, computes pairwise Bhattacharyya Coefficients between all ~31.6M firm pairs at each K_max, and measures whether BC rankings converge as K_max increases.
+
+**BC scope**: All non-excluded firms are included (not just GMM-tier). Single-Gaussian firms are K_max-invariant (K=1 always), but they participate in the ranking universe because the GMM-tier firm they're compared against changes with K_max. The SG-vs-SG block is computed once and reused across all K_max values for efficiency.
 
 **Why it matters**: The design phase found BC rankings moderately stable (Spearman rho ~0.80) but the top tail -- where M&A candidate pairs live -- is materially unstable (top-50 overlap 22-48%). If rankings converge by K_max=25-30, we have our production K_max. If they don't, we escalate per the trigger framework in ADR-004.
+
+**Convergence rule**: Persistent stability — K* is the smallest K_max such that ALL subsequent adjacent comparisons from K* onward pass both Spearman rho > 0.95 AND top-50 overlap > 80%. A single good transition is not enough if later transitions destabilize.
 
 ---
 
@@ -33,10 +37,10 @@ Committed at: `26b51ec` (Week 2 design commit) + subsequent sweep script commit.
 | **Alternative** | `c6i.4xlarge` | Same specs, newer generation. Either works. |
 | **Root volume** | 50 GB gp3 | Script + data + outputs ~3 GB; generous headroom for logs and checkpoints. |
 | **Cost** | ~$0.68/hr (c5.4xlarge) | |
-| **Estimated runtime** | 3-6 hours | 5 K_max values x ~1,645 GMM fits each + 5 BC matrices (~1.35M pairs each) |
-| **Estimated cost** | ~$2-4 | |
+| **Estimated runtime** | 8-14 hours | 5 K_max values x ~7,949 GMM fits each + 5 BC matrices (~31.6M pairs each, with SG block caching) |
+| **Estimated cost** | ~$5-10 | |
 
-The bottleneck is GMM fitting (sklearn BayesianGaussianMixture, n_init=5, max_iter=200). BC computation is vectorized with numpy broadcasting (~5 min per K_max).
+The bottleneck is now BC computation on ~7,949 firms (~31.6M pairs per K_max). The SG-vs-SG block (~19.9M pairs) is computed once and reused, reducing per-K_max work to ~11.7M new pairs. GMM fitting is secondary. BC computation is vectorized with numpy broadcasting.
 
 ---
 
@@ -84,18 +88,19 @@ If interrupted, re-running the same command will:
 
 ```
 output/kmax_sweep/
-    firm_gmm_parameters_k10.parquet    # GMM results for all firms at K_max=10
+    firm_gmm_parameters_k10.parquet    # GMM results for all non-excluded firms at K_max=10
     firm_gmm_parameters_k15.parquet    # ... K_max=15
     firm_gmm_parameters_k20.parquet    # ... K_max=20
     firm_gmm_parameters_k25.parquet    # ... K_max=25
     firm_gmm_parameters_k30.parquet    # ... K_max=30
-    bc_matrix_k10.npz                  # Pairwise BC matrix (GMM-tier firms only)
-    bc_matrix_k15.npz
-    bc_matrix_k20.npz
-    bc_matrix_k25.npz
-    bc_matrix_k30.npz
+    bc_block_sg_vs_sg.npz              # SG-vs-SG BC block (K_max-invariant, computed once)
+    bc_matrix_all_k10.npz              # Pairwise BC matrix (ALL non-excluded firms)
+    bc_matrix_all_k15.npz
+    bc_matrix_all_k20.npz
+    bc_matrix_all_k25.npz
+    bc_matrix_all_k30.npz
     convergence_summary.json           # Full convergence analysis
-    excluded_firms.csv                 # Firms below min_patents threshold
+    excluded_firms.csv                 # Firms below threshold (gvkey, n_patents, reason)
     status/
         sweep_status.json              # Machine-readable status for monitoring
     sweep.log                          # Full stdout/stderr log
@@ -157,8 +162,10 @@ or
 VERDICT: NOT CONVERGED by K_max=30
 ```
 
-**Convergence decision rule** (from Codex review of ADR-004):
+**Convergence decision rule** (persistent stability, from Codex review):
 - Spearman rho > 0.95 AND top-50 overlap > 80% between adjacent K_max values
+- Must hold for ALL subsequent adjacent pairs from the convergence point onward
+- Example: if 15->20 passes but 20->25 fails, NOT converged at 20
 
 ### What to send back
 
@@ -185,7 +192,7 @@ Alternatively, since estimated runtime is 3-6 hours (well within the 8-hour defa
 
 | Risk | Likelihood | Mitigation |
 |------|-----------|------------|
-| OOM on BC matrix | Low | BC matrices are ~21 MB each (1645^2 * 8 bytes). Peak memory ~2 GB. 32 GB available. |
+| OOM on BC matrix | Low | BC matrices are ~505 MB each (7949^2 * 8 bytes). Peak memory ~4 GB with SG block + 1 active matrix. 32 GB available. |
 | sklearn convergence warnings | Expected | Suppressed with `warnings.catch_warnings()`. Non-convergence is tracked in `converged` field. |
 | K_max > n_patents crash | Guarded | `actual_kmax = min(k_max, len(X) - 1)` prevents sklearn ValueError. |
 | Interrupted mid-run | Guarded | Per-K_max checkpointing. Re-run resumes from last completed stage. |
