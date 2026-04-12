@@ -1,237 +1,235 @@
 # Week 2 Interpretation Instance Summary
 
-**Instance role**: Interpret K_max sweep results, diagnose top-tail instability, propose fixes  
+**Instance role**: Interpret K_max sweep results, diagnose top-tail instability, fix root causes  
 **Started**: 2026-04-09  
-**Last update**: 2026-04-11  
-**Status**: HALT after deduplication scan complete; awaiting Codex BC recomputation + misspecification tests
+**Completed**: 2026-04-12  
+**Final commit**: `170efc3` (Diagnose and fix K_max sweep top-tail instability)  
+**Repository**: `github.com:Torr1n/firm-pair_merger_prediction.git` branch `master`
 
 ---
 
-## Mission as inherited
+## Mission and Outcome
 
-The K_max convergence sweep (run 20260409T170706Z) returned **NOT_CONVERGED**:
-- Bulk Spearman ρ ≈ 0.99 across all transitions (passes threshold)
-- Top-50 overlap collapsed from 80% (K10→K15) to 0% (K15→K20) and stayed near 0% through K30 (fails threshold)
+This instance was asked to interpret the K_max convergence sweep results (run `20260409T170706Z`), which had returned **NOT_CONVERGED** — Spearman ρ ≈ 0.99 but top-50 pair overlap collapsed from 80% to 0% at K_max=15→20.
 
-The previous instance had pre-registered an analysis notebook + executive summary with `[RESULT]` placeholders, run the sweep on AWS, and saved artifacts to S3 at `s3://ubc-torrin/firm-pair-merger/week2/kmax_sweep/runs/20260409T170706Z/`.
+**The original non-convergence was entirely an artifact of two bugs.** After fixing them, the corrected full-scale result (run `20260412T043407Z`, 7,485 deduplicated firms) is:
 
-I was asked to:
-1. Pull the sweep artifacts
-2. Run a four-step diagnostic sequence (tail-margin, robust-core, firm characteristics, optional alt-model)
-3. Determine whether the instability was near-tie noise, model misspecification, or both
-4. Populate the pre-registered analysis artifacts
-5. Reopen ADR-004 for the not-converged case
-6. Then proceed to TDD implementation of PortfolioBuilder/GMMFitter
-
----
-
-## What I actually found (in narrative order)
-
-### Step 1 — Diagnostic sequence revealed something different than expected
-
-The four-step diagnostic (results in `output/kmax_sweep/diagnostic_results.json`) showed:
-
-- **Diagnostic 1 (Tail margins)**: Cross-K_max BC shifts are 13.2x larger than gaps between adjacent top-50 ranks. Looks like near-ties → BUT see Step 2.
-- **Diagnostic 2 (Robust core)**: 0 robust pairs at any top-k level. ALL top-200 pairs are populated by different sets at each K_max.
-- **Diagnostic 3 (Firm characteristics)**: 464 unique firms appear in any top-200; volatile pairs are 252 single-Gaussian + 212 GMM. Hub firms (small firms with K=16-24) dominate at high K_max.
-- **Diagnostic 4 (BC distribution)**: Mean BC grows from 0.000364 to 0.001858. Max BC grows from 1.0007 to 5.39 — **theoretically impossible since BC ∈ [0,1]**.
-
-### Step 2 — The BC formula is unbounded
-
-`bc_mixture` in `scripts/run_kmax_sweep.py:473` uses `√(πᵢ·πⱼ)` weighting for mixture-level BC:
-
-```python
-weight_grid = np.sqrt(gmm_a["weights"][:, None] * gmm_b["weights"][None, :])
-return float(np.sum(weight_grid * bc_grid))
-```
-
-This is mathematically an **upper bound** on the true BC (proof via triangle inequality on the integrand `√(p·q)`). The bound is tight at K=1 and grows progressively looser as K increases. For K equal-weight components: max value = K.
-
-Arthur's methodology.md says "aggregate using GMM weights" — it does NOT specify √ weights. The √ was an implementation artifact from conflating the √ in the BC definition (which applies to densities) with the mixture aggregation.
-
-**Fix**: change to linear weights `πᵢπⱼ`. This is bounded in [0,1] and aligns with the methodology.
-
-### Step 3 — Cosine normalization was tested and FAILED
-
-I tried normalizing by self-similarity (`scripts/verify_bc_normalization.py`):
-- BC_norm(A,B) = BC_raw(A,B) / √(BC_raw(A,A) × BC_raw(B,B))
-
-Result: WORSE than raw. The normalized top-200 all collapse to BC = 1.0000 exactly (span = 0.0), making top-k selection completely random. Convergence metrics dropped:
-
-| Transition | Raw top-50 | Normalized top-50 |
+| Transition | Spearman ρ | Top-50 overlap |
 |---|---|---|
-| 10→15 | 80% | 24% |
-| 15→20 | 0% | 6% |
-| 20→25 | 0% | 18% |
-| 25→30 | 6% | 8% |
+| K10→K15 | 0.9912 | **98%** |
+| K15→K20 | 0.9925 | **100%** |
+| K20→K25 | 0.9917 | **98%** |
+| K25→K30 | 0.9930 | **96%** |
+| K10→K30 | 0.9833 | **96%** |
 
-This led me to discover that the underlying issue at low K_max wasn't metric-related at all — see Step 4.
+**VERDICT: CONVERGED at K_max=10.** Max BC = 0.997, zero pairs above 1.0. The persistent stability rule (ρ > 0.95 AND top-50 > 80% from K* onward) is satisfied at the smallest K_max tested.
 
-### Step 4 — Top-50 pairs at K_max=10-15 are duplicate firms
-
-Running `scripts/identify_top_pairs.py` revealed that ALL 50 top pairs at K_max=10 share **100% of their patents** (8,098 total shared). They're anagram-style PRIV_ name variants:
-- PRIV_PARADETECHNOLOGIES / PRIV_PRIDETECHNOLOGIES (136 patents each)
-- PRIV_VIATECHNOLOGIES / PRIV_VTECHNOLOGIES (2,016 each)
-- PRIV_AASKITECHNOLOGY / PRIV_OSKITECHNOLOGY (579 each)
-- ... and so on
-
-These are the same legal entity appearing under multiple names in v3 data. They have identical GMM parameters and therefore BC ≈ 1.0 with massive ties.
-
-At K_max=20+, the top-50 transitions to a completely different population: small firms (50-68 patents) with very high K (16-24) whose components inflate the √-weighted BC. ZERO shared patents at K_max=20+. The 0% top-50 overlap at K15→K20 is a **phase transition** between these two failure regimes.
-
-### Step 5 — Subsidiary discussion (Torrin's question)
-
-After I proposed deduplicating only the strict aliases, Torrin asked whether subsidiary relationships in the data would create false-positive M&A predictions ("predicting" Alphabet should acquire Waymo when Alphabet already owns Waymo).
-
-Yes — and this is structurally bad, not just noisy. There are 183+ parent/subsidiary pairs in the data:
-- Alphabet/Waymo, Alphabet/Verily, Alphabet/PRIV_GOOGLE
-- Qualcomm/Snaptrack/Atheros/Pixtronix/etc. (8 subs)
-- J&J/Ethicon/Janssen/Johnson&JohnsonConsumer/BioSenseWebster (6 subs)
-- IBM/PRIV_INTERNATIONALBUSINESS
-- 007585/Motorola Mobility
-
-Each generates a high-confidence M&A "prediction" for an event that already occurred. This would crater precision@K when validating against 2021 M&A labels. Conceptually: patent assignment in Compustat reflects **current ownership**, so the parent's portfolio already includes the subsidiary's patents. Including both creates double-counting AND false positives.
-
-### Step 6 — Project-wide duplicate scan
-
-Ran `scripts/duplicate_firm_scan.py` to characterize the full Jaccard distribution across all firm pairs that share at least one patent.
-
-**Findings:**
-- 991 firm pairs share at least one patent (only 0.003% of 31.6M possible)
-- 341 pairs at Jaccard = 1.0 (strict aliases — 196 cliques, 450 firms)
-- Clean break in the histogram: 9 pairs in [0.95, 0.99), ZERO in [0.99, 1.0), spike at 1.0
-- 183 nested pairs (containment ≥ 0.95, Jaccard < 0.80) — subsidiaries
-- 124 moderate-overlap pairs (0.50 ≤ J < 0.95) — corporate reorganizations / spinoffs
-
-### Step 7 — Unified deduplication rule
-
-Ran `scripts/duplicate_firm_unified_rule.py` with:
-**Rule**: Drop firm B if there exists firm A with `|A| ≥ |B|` and `containment(B → A) ≥ 0.95`.
-
-**Result**:
-- 568 pairs trigger the rule
-- 464 firms removed
-- 7,485 firms remain (down from 7,949 — 5.8% reduction)
-- Breakdown: 264 aliases, 141 subsidiaries, 59 predecessors
-
-All test cases (Alphabet/Waymo, Qualcomm/Snaptrack, IBM, J&J subs) produced correct results. Notable edge case: Lyft and GeneralData pairs have the PRIV_ record with MORE patents than the public record, so the rule keeps PRIV_ — this is correct (more complete record).
-
-### Step 8 — Misspecification (suggestive but unconfirmed)
-
-Independent of the data/formula bugs, the visualizations show a separate concerning pattern:
-
-1. **Effective K does not saturate** by K_max=30 (mean 8.0 → 13.7, decelerating but not plateauing)
-2. **Small firms with extreme K** (Viz 2C): firms with 50-100 patents getting K=15-25, vastly exceeding Bayesian prior expectations of E[K] ≈ log(n) ≈ 4-5
-3. **Bimodal distribution emerging** at higher K_max (Viz 2B)
-4. **All 5 mega-firms hit the K_max ceiling** at K_max=10 AND K_max=15 (Viz 5A)
-
-These patterns are consistent with the Gaussian assumption being inadequate for UMAP-reduced data — UMAP uses a Student-t kernel and produces non-convex clusters. The Bayesian audit (`docs/epics/week2_firm_portfolios/bayesian_gmm_audit.md`) flagged this risk explicitly and recommended Gaussianity diagnostics that we never ran.
-
-**This is unconfirmed**: it could be partly explained by duplicates (which inflate the small-firm K bin). After deduplication, if the K explosion persists, that's stronger evidence of misspecification.
+This means **Branch A of the pre-registered decision framework** applies: lock K_max=10 as the production default, implement with a single primary specification, keep a neighbor (K_max=15) as a robustness check.
 
 ---
 
-## What's been decided
+## What I Actually Did (Narrative Arc)
 
-1. **Apply the unified deduplication rule** (containment ≥ 0.95) — 464 firms dropped, 7,485 remain
-2. **Fix the BC formula** to use linear weights `πᵢπⱼ` instead of `√(πᵢπⱼ)`
-3. **Recompute BC matrices** from saved GMM parameters (no re-fitting needed)
-4. **Run misspecification diagnostics** on the deduplicated, corrected dataset to settle the Gaussian-assumption question definitively
-5. **Then populate the notebook** and knit to PDF for the team email
+The session unfolded as a detective story. I was asked to distinguish "near-tie noise" from "model misspecification." I found neither — instead I found two compounding bugs that fully explained the instability. The key insight came not from running the prescribed diagnostics, but from noticing that BC values exceeded 1.0 (theoretically impossible), which led to the formula bug, which led to asking "what ARE these top-50 pairs?", which led to the duplicate firm discovery, which led to Torrin's question about subsidiaries, which led to the unified deduplication rule.
+
+### Phase 1: Prescribed Diagnostics (Correct Process, Misleading Initial Results)
+
+Ran the four-step diagnostic sequence prescribed by Codex in the interpretation bootstrap prompt:
+
+1. **Tail-margin analysis**: shift/gap ratio = 13.2 (shifts 13x larger than inter-rank gaps). Looked like near-ties.
+2. **Robust-core analysis**: 0 robust pairs at ANY top-k level. 79% of top-50 pairs appear at only 1 of 5 K_max values.
+3. **Firm characteristics**: 464 unique firms in any top-200, all volatile. Hub firms with K=16-24 from 50-68 patents dominate at high K_max.
+4. **BC distribution**: Max BC grows from 1.0007 to 5.39 across K_max.
+
+The diagnostics were valuable not for the answers they gave to the original question, but for the anomalies they surfaced — particularly BC values exceeding 1.0.
+
+### Phase 2: BC Formula Bug Discovery (Critical Finding #1)
+
+The max BC of 5.39 is impossible for a Bhattacharyya Coefficient (which is bounded in [0,1]). Investigation revealed:
+
+`bc_mixture` in `run_kmax_sweep.py:473` uses `√(πᵢπⱼ)` weighting. This is mathematically an **upper bound** on the true BC (proved via triangle inequality on the √(p·q) integrand). The bound is tight at K=1 but grows as K increases. For K equal-weight components: max BC = K.
+
+Arthur's methodology.md says "aggregate using GMM weights" — no √ specified. The √ was an implementation artifact from conflating the √ in the BC *definition* (which applies to probability densities) with the mixture weight *aggregation*.
+
+**Fix**: linear weights `πᵢπⱼ`. Bounded in [0,1], aligns with methodology.
+
+**Tested alternatives**: Cosine normalization (BC_raw / √(self_A × self_B)) was tried and **FAILED** — it compressed all top-200 to BC=1.0000 exactly, making rankings worse. This failure led directly to Phase 3.
+
+### Phase 3: Duplicate Firm Discovery (Critical Finding #2)
+
+When cosine normalization failed, I asked: "Why do 300+ pairs have BC = 1.0 at every K_max?" Running `scripts/identify_top_pairs.py` revealed the answer: **ALL 50 top pairs at K_max=10 are pairs of firms sharing 100% of their patents.** They are the same company under anagram-style PRIV_ name variations:
+
+- PRIV_PARADETECHNOLOGIES / PRIV_PRIDETECHNOLOGIES (136 patents, 100% shared)
+- PRIV_VIATECHNOLOGIES / PRIV_VTECHNOLOGIES (2,016 patents, 100% shared)
+
+At K_max=20+: ZERO shared patents in the top-50. The 0% overlap at K15→K20 is a **phase transition** between duplicate-dominated ranking (K_max≤15) and inflation-dominated ranking (K_max≥20).
+
+### Phase 4: Subsidiary Discussion (Torrin's Critical Question)
+
+I initially proposed deduplicating only the strict aliases (Jaccard ≥ 0.99). Torrin asked: "Would we ever 'predict' a corporation should acquire a subsidiary it already owns?"
+
+This question expanded the deduplication scope fundamentally. Patent assignment in Compustat reflects **current ownership** — Alphabet's portfolio already includes Waymo's 1,190 patents. Including both as separate firms creates double-counting AND false-positive M&A predictions for already-completed deals.
+
+A project-wide duplicate scan (`scripts/duplicate_firm_scan.py`) characterized the full Jaccard distribution:
+- 991 overlapping pairs (0.003% of all possible)
+- 341 strict aliases at Jaccard = 1.0
+- 183 nested subsidiary relationships (containment ≥ 0.95, Jaccard < 0.80)
+- Clean natural gap in the histogram at Jaccard ≈ 0.95-0.99
+
+**Unified rule**: Drop firm B if there exists firm A with |A| ≥ |B| and containment(B→A) ≥ 0.95. This catches aliases, subsidiaries, AND predecessor records.
+
+**Result**: 464 firms removed (264 aliases, 141 subsidiaries, 59 predecessors). 7,485 firms remain.
+
+### Phase 5: Misspecification Discussion (Important but Unconfirmed)
+
+Independent of the two bugs, effective K does not saturate by K_max=30 and small firms show extreme K values. Torrin and I discussed whether this indicates the Gaussian assumption is inadequate for UMAP-reduced data. My assessment: suggestive but not conclusive. Direct Gaussianity diagnostics (Mahalanobis Q-Q, Mardia's test) would settle it, but the convergence result materially weakens the misspecification urgency.
+
+### Phase 6: Corrected Recomputation (Codex VM)
+
+Wrote `scripts/recompute_bc_corrected.py` — loads saved GMM parameters, filters to deduplicated firms, recomputes BC with linear weights. Validated locally on a 1000-firm sample (top-50 = 100% at every transition).
+
+**Codex ran the full-scale recomputation on c5.4xlarge (run 20260412T043407Z).** Result: CONVERGED at K_max=10 with top-50 overlap 96-100% across all transitions. Max BC = 0.997. Zero pairs above 1.0.
+
+### Phase 7: PCA Comparison Script (Written, Deferred)
+
+Wrote `scripts/run_pca_comparison_sweep.py` for testing whether UMAP introduces Gaussian-incompatible distortion. Per Codex's recommendation, this was **NOT** bundled into the corrected BC recomputation — the experiment-isolation principle says "fix the known bugs first, see the result, then test representation choice as a separate follow-up." The PCA script is validated and in the repo, ready to run if/when needed.
+
+### Phase 8: Notebook Analysis (Completed for Original Data, Awaiting Corrected Data)
+
+The pre-registered notebook was executed on the ORIGINAL (buggy) sweep data, generating 12 visualization PNGs. I did a deep independent analysis of all 12 visualizations and wrote detailed interpretive notes. The key observations:
+
+- **Viz 2A (K progression)**: Mean effective K decelerates but doesn't plateau. Ceiling rate drops from 35% to 0.2%.
+- **Viz 2C (K vs firm size)**: Spearman ρ = 0.336 (weak). Small firms with extreme K are outliers — some may be duplicates.
+- **Viz 3B (BC scatter K15 vs K20)**: Axes clipped at [0,1], hiding the inflation (BC values up to 2.59 at K_max=20). Needs an unclipped version.
+- **Viz 4A (Top-100 overlap heatmap)**: Block-diagonal structure shows three regimes (K10-K15, K20, K25-K30).
+- **Viz 4B (Rank trajectories)**: Waterfall pattern — all top-200 pairs drop below rank 200 by K_max=20.
+- **Viz 5A (Named firms)**: ALL five mega-firms hit ceiling at K_max=10 and K_max=15. Confirms K_max=10 is too restrictive for mega-firms.
+- **Viz 5B (Weight evolution)**: Orderly weight subdivision at higher K_max for mega-firms.
+- **Viz 6A (Convergence dashboard)**: Split personality — three metrics pass, one (top-50) catastrophically fails.
+
+**These PNGs are from the BUGGY sweep data.** They need to be regenerated from the corrected BC matrices before the team email goes out. The notebook cell code should work as-is on the corrected data files — only the file paths need to change to point to the `_dedup_linear` versions.
 
 ---
 
-## What's NOT yet decided / open questions
+## What Was NOT Completed
 
-1. **Borderline cases** (16 pairs at containment 0.95-0.97, 34 pairs at 0.85-0.95): the current 0.95 threshold leaves ~34 likely-but-not-definite subsidiary cases unmerged. Manual review is the ideal but optional.
-2. **BC formula choice**: linear weights is the cleanest, but Monte Carlo true BC is also an option (more expensive but theoretically exact). Decision is to start with linear weights.
-3. **If misspecification tests confirm non-Gaussianity**, what's the response? Options:
-   - (a) Switch to t-mixtures (heavier tails, easy swap)
-   - (b) Re-tune UMAP parameters (n_neighbors, min_dist, metric)
-   - (c) Use PCA instead of UMAP for the dimensionality reduction
-   - (d) Accept misspecification and proceed with the caveat in Week 3 reporting
-4. **The 9 near-aliases at 0.95-0.99 Jaccard**: should we manually merge these too? Probably yes, but they're a small population.
+1. **Notebook NOT regenerated** with corrected BC matrices (12 PNGs need regeneration, 4 interpretation cells need writing, Section 7 narrative needs writing)
+2. **Executive summary NOT populated** (`docs/epics/week2_firm_portfolios/kmax_sweep_executive_summary.md` still has `[RESULT]` placeholders)
+3. **ADR-004 NOT updated** for the CONVERGED outcome (needs to switch from "provisional K_max=15" to "converged at K_max=10, production default = 10")
+4. **firm_portfolio_spec NOT updated** (needs deduplication as a required input validation step; needs to reflect CONVERGED outcome under Branch A)
+5. **Misspecification diagnostics NOT run** (Mahalanobis Q-Q, Mardia, prior sensitivity) — less urgent now but still worth doing as follow-up
+6. **PCA comparison NOT run** — deferred per Codex recommendation
+7. **Team email NOT sent** — waiting on notebook population
+8. **TDD implementation of PortfolioBuilder/GMMFitter NOT started** — blocked on design revision
+9. **Corrected artifacts NOT pulled locally** — the corrected BC matrices are on S3 at `s3://ubc-torrin/firm-pair-merger/week2/kmax_sweep/runs/20260412T043407Z-dedup-linear/` but have not been downloaded to the local working directory
 
 ---
 
-## Critical files and their roles
+## What I'm Confident In
 
-### Documentation
-- `docs/epics/week2_firm_portfolios/kmax_diagnostic_findings.md` — **PRIMARY FINDINGS DOCUMENT**, fully updated
-- `docs/epics/instance_handover/week2_implementation_instance_summary.md` — previous instance's handover
-- `docs/epics/instance_handover/week2_interpretation_instance_summary.md` — this document
+1. **The two bugs fully explain the original instability.** The corrected result converges cleanly at full scale (7,485 firms, 28M+ pairs per K_max). The 1000-firm test was directionally correct and the full-scale result was even slightly better.
+2. **The unified deduplication rule is correct.** All test cases (Alphabet/Waymo, Qualcomm/Snaptrack, IBM, J&J subs, Lyft, GeneralData) produce the right answer. The 0.95 containment threshold has a natural gap in the data supporting it.
+3. **The linear-weight BC formula is correct.** It's bounded in [0,1], aligns with Arthur's methodology, and produces convergent results. Max BC = 0.997 on the full dataset.
+4. **The bulk firm-similarity landscape is stable.** Spearman ρ ≈ 0.99 across all transitions, median NN-5 = 100%. This finding was consistent across the original buggy analysis AND the corrected analysis.
+5. **The pre-registered analysis structure is sound.** The 7-section notebook, the decision framework with Branches A and B, the convergence thresholds — all designed before seeing data, all work as intended with the corrected results.
 
-### Scripts (all under `scripts/`)
-- `run_kmax_sweep.py` — original sweep script. **Bug at line 473** in `bc_mixture` (sqrt weights)
-- `diagnostic_kmax_stability.py` — four-step diagnostic
-- `verify_bc_normalization.py` — cosine normalization test (rejected)
-- `verify_linear_weights.py` — linear weight comparison
-- `identify_top_pairs.py` — top-pair identity analysis (revealed duplicates)
-- `duplicate_firm_scan.py` — project-wide Jaccard scan
-- `duplicate_firm_unified_rule.py` — containment-based dedup rule
+## What I'm NOT Confident In
 
-### Sweep outputs (under `output/kmax_sweep/`)
-- `bc_matrix_all_k{10,15,20,25,30}.npz` — original BC matrices (BUGGY formula, will need recomputation)
-- `firm_gmm_parameters_k{10,15,20,25,30}.parquet` — GMM parameters (still valid)
-- `bc_block_sg_vs_sg.npz` — K_max-invariant SG block (will also need recomputation with linear weights)
-- `convergence_summary.json` — original convergence metrics
-- `diagnostic_results.json` — diagnostic findings
-- `duplicate_pairs.parquet` — 991 overlapping firm pairs
-- `duplicate_scan.json` — duplicate scan summary
-- `deduplication_decisions.{csv,parquet}` — 464 dropped firms with reasons
-- `deduplication_summary.json` — deduplication summary
+1. **Whether the misspecification signal is genuine or a duplicate-artifact residual.** Effective K not saturating is concerning, but the corrected convergence result materially weakens this concern. The 9.3% reduction in the small-firm bin from deduplication may have cleaned up the worst offenders. Need Gaussianity diagnostics to settle.
+2. **Whether the 0.95 containment threshold catches all true duplicates.** 34 pairs in [0.85, 0.95) containment range include some that look like real subsidiaries (Hughes Network Systems, Switchcraft, McAfee). Manual review of these is valuable but wasn't done.
+3. **Whether the notebook PNGs will look clean after regeneration.** The corrected data should produce much more interpretable visualizations (no BC > 1, no duplicate-dominated top-k), but I haven't actually seen them yet. Edge cases might emerge.
+4. **Whether K_max=10 is genuinely the right production default or just the smallest value we tested.** The persistent stability rule says K*=10 because all transitions from K_max=10 onward pass. But we didn't test K_max=5 or K_max=8. The mega-firm deep dives (Viz 5A) show ALL five firms hit the ceiling at K_max=10, which suggests K_max=10 is binding for large firms and a higher default (15 or 20) might be more appropriate. This needs discussion.
+5. **Whether the linear-weight BC is economically the "right" metric.** It measures "expected overlap between random technology areas from each firm" — which naturally favors focused firms (two single-Gaussian firms in the same niche always dominate). For M&A prediction where acquirers are often large diversified firms, this may not rank the right pairs highest. This is a Week 3 question.
+
+---
+
+## Decisions Made (and Why)
+
+| Decision | Rationale | Who decided |
+|----------|-----------|-------------|
+| Linear weights `πᵢπⱼ` for BC formula | Bounded [0,1], aligns with methodology.md, eliminates K-dependent inflation | Claude, validated by test |
+| Containment ≥ 0.95 for dedup | Natural gap in Jaccard histogram; catches aliases + subs + predecessors | Torrin + Claude after subsidiary discussion |
+| Drop subsidiary firms (not just aliases) | Torrin's question: "Would we predict a corp should acquire what it already owns?" Answer: yes, which is structurally bad | Torrin initiated, Claude formalized |
+| Sequence UMAP fix before PCA comparison | Codex: "first fix the known bugs, then see the corrected result, then test representation choice as secondary." Experiment isolation > VM efficiency | Codex recommended, Torrin + Claude agreed |
+| PCA script written but not run | Available as follow-up if corrected UMAP shows residual issues | Codex recommendation |
+| K_max=10 as converged production default | Pre-registered persistent stability rule. All transitions from K_max=10 pass both thresholds | Pre-registered rule, data confirmed |
+
+---
+
+## Workflow Patterns That Worked Well
+
+1. **Diagnostic-first approach**: Running the four-step diagnostic before any fixes was essential. The anomalies (BC > 1, hub firms, near-ties) built the evidence for the actual root causes.
+2. **Asking "what ARE these pairs?"**: The identify_top_pairs.py analysis was the breakthrough. Abstract statistics (shift/gap ratios, overlap percentages) didn't reveal the duplicate-firm problem. Looking at the actual firm names and shared patents did.
+3. **Torrin's subsidiary question**: This wasn't in the diagnostic plan. It came from Torrin thinking about the downstream M&A use case. The user's domain knowledge caught a structural issue that pure data analysis would have missed.
+4. **Test-before-deploy**: The 1000-firm local test of the corrected approach gave confidence to hand off to Codex. The full-scale result confirmed the test's prediction.
+5. **Codex's experiment-isolation principle**: Separating the UMAP fix from PCA comparison kept the causal narrative clean. "The bugs caused the instability" is a much stronger story than "the bugs plus/or UMAP caused it."
+6. **Pre-registration**: The notebook structure and decision framework were designed before seeing any results. When the corrected results landed in Scenario A, the path forward was unambiguous.
+
+## Patterns That Didn't Work Well
+
+1. **I initially under-scoped the dedup**: I proposed Jaccard ≥ 0.99 (catching only strict aliases), which would have missed 183 subsidiary pairs. Torrin's question was the correction. Lesson: always think about the downstream use case, not just the data cleaning.
+2. **I over-proposed PCA bundling**: I proposed running PCA in parallel with the UMAP fix on the same VM. Codex correctly identified this as experiment-conflation. Lesson: marginal compute cost is not the right frame for experimental design.
+3. **Cosine normalization was a dead end**: I spent time implementing and testing it when the core issue was duplicate firms, not metric scaling. Lesson: when all top-200 values are at the theoretical maximum, the problem is in the DATA, not the metric.
+
+---
+
+## Memory Files Saved
+
+| File | Type | Content |
+|------|------|---------|
+| `user_torrin.md` | user | Role, background, communication style, preferences |
+| `project_kmax_sweep_result.md` | project | Original NOT_CONVERGED result (now superseded by corrected result) |
+| `project_duplicate_firms_bc_formula.md` | project | The two bug discoveries |
+| `project_dedup_rule.md` | project | Unified deduplication rule details |
+| `project_corrected_bc_converges.md` | project | Corrected result CONVERGED at K_max=10 |
+| `feedback_thoroughness.md` | feedback | Preference for depth over speed |
+| `feedback_isolate_experiments.md` | feedback | Sequence over parallelize, experiment isolation |
+| `reference_s3_artifacts.md` | reference | S3 paths for all data |
+
+---
+
+## Critical Files for Downstream Instance
+
+### Must-read (in order)
+1. `docs/epics/week2_firm_portfolios/kmax_diagnostic_findings.md` — **PRIMARY FINDINGS DOC**, fully updated with all discoveries
+2. `docs/epics/week2_firm_portfolios/codex_bc_recomputation_handoff.md` — contains the post-run decision tree (Scenario A applies)
+3. `docs/epics/week2_firm_portfolios/kmax_sweep_executive_summary.md` — skeleton with `[RESULT]` placeholders to populate
+
+### S3 locations
+- **Corrected artifacts (use these)**: `s3://ubc-torrin/firm-pair-merger/week2/kmax_sweep/runs/20260412T043407Z-dedup-linear/`
+  - `convergence_summary_dedup_linear.json`
+  - `bc_matrix_all_k{10,15,20,25,30}_dedup_linear.npz`
+  - `bc_block_sg_vs_sg_dedup_linear.npz`
+  - `recompute.log`
+- **Original (buggy) artifacts (for reference only)**: `s3://ubc-torrin/firm-pair-merger/week2/kmax_sweep/runs/20260409T170706Z/`
+- **Dedup decisions**: `s3://ubc-torrin/firm-pair-merger/week2/kmax_sweep/deduplication_decisions.parquet`
+- **1536D pre-UMAP vectors (for PCA follow-up)**: `s3://ubc-torrin/firm-pair-merger/runs/20260408T005013Z/output/embeddings/concatenated_1536d.parquet`
+
+### Scripts
+- `scripts/recompute_bc_corrected.py` — the script Codex ran successfully
+- `scripts/run_pca_comparison_sweep.py` — written, validated on sample, deferred
+- `scripts/run_kmax_sweep.py` — original sweep script (still has the sqrt-weight bug at line 473; the fix is in recompute_bc_corrected.py, not patched in place)
 
 ### Notebook
-- `notebooks/03_kmax_convergence_analysis.ipynb` — pre-registered structure, mostly populated
-- `notebooks/03_viz*.png` — 12 visualizations from the BUGGY sweep results, **will need regeneration after BC recomputation**
-- 4 interpretation cells need writing (cells 14, 20, 28, 36) plus Section 7 narrative
-
-### Pre-registered artifacts (will need updating)
-- `docs/epics/week2_firm_portfolios/kmax_sweep_executive_summary.md` — skeleton with `[RESULT]` placeholders
-
-### ADRs (will need updating)
-- `docs/adr/adr_004_k_selection_method.md` — needs reopening for the not-converged + misspecification context
-- `docs/specs/firm_portfolio_spec.md` — needs deduplication step added as input validation
+- `notebooks/03_kmax_convergence_analysis.ipynb` — code cells executed on BUGGY data; needs re-execution on corrected data
+- `notebooks/03_viz*.png` — 12 PNGs from BUGGY data; will need regeneration
+- 4 interpretation cells (14, 20, 28, 36) need writing
+- Section 7 narrative needs writing
 
 ---
 
-## Codex deployment scripts (still valid)
-- `scripts/start_kmax_sweep.sh` — launcher
-- `scripts/watch_sweep_and_shutdown.sh` — watchdog
-- `infrastructure/user_data_kmax_sweep.sh` — EC2 bootstrap
+## The Downstream Instance's Mission
 
----
+**Scenario A confirmed.** The next instance should:
 
-## What I'd tell future Claude (or current Codex) starting from here
-
-1. **Read the diagnostic findings doc first** (`docs/epics/week2_firm_portfolios/kmax_diagnostic_findings.md`). It's the single source of truth.
-2. **The 12 PNGs in `notebooks/` are from the BUGGY sweep** — they tell the story of the discovery, but should NOT be presented as final results. Regenerate after the corrected BC matrices are computed.
-3. **Don't re-fit GMMs**. The fitted parameters in `firm_gmm_parameters_k*.parquet` are unaffected by the BC formula bug or duplicate firms. Only the BC matrices need recomputation.
-4. **The deduplication is a 5.8% removal**. This is a substantial reduction in the small-firm bin (9.3% there) but NOT the dominant population. The misspecification test will reveal whether the K explosion is purely a duplicate artifact or has a residual non-Gaussian component.
-5. **The user (Torrin) has high latency tolerance and prefers depth.** Don't rush. Run thorough analyses, present findings with evidence, propose options, let him decide.
-6. **The user thinks in terms of supervisor meetings.** Frame work as what Jan Bena would want to see. Pre-registration discipline matters. Honest scientific framing of negative findings is preferred over forced positive narratives.
-7. **Findings should be evidence-backed.** Every claim should have a script + output file + table. The diagnostic findings doc is the template.
-
----
-
-## Memory entries I've saved
-
-- `user_torrin.md` — user role, communication style, preferences
-- `project_kmax_sweep_result.md` — original NOT_CONVERGED result
-- `project_duplicate_firms_bc_formula.md` — the two main findings
-- `feedback_thoroughness.md` — preference for depth over speed
-- `reference_s3_artifacts.md` — S3 paths
-
----
-
-## Status at handover (2026-04-11)
-
-- ✅ Diagnostic sequence complete
-- ✅ Root causes identified (duplicates + BC formula + suggestive misspecification)
-- ✅ Duplicate firm scan complete
-- ✅ Unified deduplication rule defined and validated
-- ⏳ **NEXT**: Apply deduplication, recompute BC matrices with linear weights (Codex VM)
-- ⏳ **NEXT**: Run misspecification diagnostics on cleaned dataset
-- ⏳ **NEXT**: Populate notebook + knit to PDF + email team
-- ⏳ **NEXT**: Update ADR-004, firm_portfolio_spec.md
-- ⏳ **NEXT**: TDD implementation of PortfolioBuilder/GMMFitter (after design revision)
+1. **Pull corrected artifacts from S3** (the 5 corrected BC matrices, convergence summary, recompute log)
+2. **Regenerate all 12 notebook visualizations** from the corrected BC matrices
+3. **Write the 4 interpretation cells** in the notebook (cells 14, 20, 28, 36)
+4. **Write Section 7 narrative** (Implications for M&A Prediction)
+5. **Populate the executive summary** with actual numbers from the corrected convergence summary
+6. **Update ADR-004** for the converged outcome (K_max=10 production default)
+7. **Update firm_portfolio_spec** to add deduplication as a required input validation step and reflect Branch A
+8. **Knit notebook to PDF** for team email
+9. **Commit** all updates
+10. **Optional follow-ups**: misspecification diagnostics (Mahalanobis Q-Q, Mardia), PCA comparison sweep
+11. **Then proceed to TDD implementation** of PortfolioBuilder/GMMFitter per the (updated) spec
