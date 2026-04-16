@@ -63,3 +63,14 @@ output_portfolios:
   firm_gmm_parameters_template: "output/portfolios/firm_gmm_parameters_k{k_max}.parquet"  # production: k15
   firm_gmm_parameters_reference: "output/portfolios/firm_gmm_parameters_k10.parquet"      # convergence-floor reference
   excluded_firms_log: "output/portfolios/excluded_firms.csv"
+
+# --- Comparison (Week 3) ---
+# Consumed by BhattacharyyaComputer (see docs/specs/comparison_spec.md).
+# Spec status: Reviewed — revisions in progress (Codex 2026-04-14); NOT yet approved
+# for implementation. This section is seeded now so the config contract is ready when
+# Codex's second review pass clears.
+comparison:
+  output_dir: "output/comparison"
+  bc_matrix_template: "output/comparison/bc_matrix_k{k_max}.npz"
+  sg_block_cache: true                  # Precompute and reuse the SG-vs-SG block (≈85% of firms are SG)
+  sg_block_chunk_size: 200              # Chunk size for SG block computation (memory mgmt)
