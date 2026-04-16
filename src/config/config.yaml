@@ -34,10 +34,12 @@ portfolio:
   min_patents: 5                    # Firms below this are excluded (ADR-005)
   single_gaussian_max: 49           # Firms with min_patents..this get K=1 (ADR-005)
   gmm_method: "bayesian"            # "bayesian" or "bic_sweep" (ADR-004)
-  k_max: 15                         # Operational default (ADR-004)
-  k_max_sweep: [10, 15, 20, 25, 30]  # Convergence sweep — produce artifacts at each value
+  k_max: 15                         # Production locked (ADR-004, 2026-04-14): converged at K=10, K=15 for mega-firm headroom
+  k_max_reference: 10               # Convergence-floor reference artifact; available for robustness checks
+  k_max_sweep: [10, 15, 20, 25, 30] # Values used in the K_max convergence sweep (reproducibility)
+  dedup_decisions_path: "output/kmax_sweep/deduplication_decisions.csv"
   covariance_type: "diag"           # "diag" per ADR-006
-  normalization: "raw"              # "raw", "l2", or "zscore" (ADR-007, pending EDA)
+  normalization: "raw"              # "raw", "l2", or "zscore" (ADR-007, finalized via EDA)
   weight_pruning_threshold: 0.01    # Components below this weight are pruned
   weight_concentration_prior: 1.0   # Dirichlet process γ — E[K]≈γ·log(n) (ADR-004, post-audit)
   mean_precision_prior: 1.0         # κ₀: weakly informative mean shrinkage
@@ -58,5 +60,6 @@ output:
 
 output_portfolios:
   checkpoint_dir: "output/portfolios"
-  firm_gmm_parameters_template: "output/portfolios/firm_gmm_parameters_k{k_max}.parquet"
+  firm_gmm_parameters_template: "output/portfolios/firm_gmm_parameters_k{k_max}.parquet"  # production: k15
+  firm_gmm_parameters_reference: "output/portfolios/firm_gmm_parameters_k10.parquet"      # convergence-floor reference
   excluded_firms_log: "output/portfolios/excluded_firms.csv"

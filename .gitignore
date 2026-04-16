@@ -31,6 +31,9 @@ infrastructure/terraform.tfstate.backup
 
 # Notebook images (generated artifacts)
 notebooks/*.png
+# Exception: Notebook 03 convergence visualizations are Week 2 deliverables
+# (teammates use them in slides; regeneratable via scripts/regenerate_notebook_pngs.py)
+!notebooks/03_*.png
 
 # OS
 .DS_Store

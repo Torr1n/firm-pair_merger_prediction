@@ -1,10 +1,10 @@
 # Firm Portfolio Construction — Interface Specification
 
-**Status**: Proposed  
-**Date**: 2026-04-08  
+**Status**: Proposed (revised 2026-04-12 for convergence resolution + deduplication)  
+**Date**: 2026-04-08 (revised 2026-04-12)  
 **Authors**: Torrin Pataki, Claude Code  
 **Reviewers**: Codex (pending)  
-**ADR Dependencies**: ADR-004 (K selection), ADR-005 (minimum patents), ADR-006 (covariance type), ADR-007 (normalization)
+**ADR Dependencies**: ADR-004 (K selection — production locked at K_max=15, converged from K=10), ADR-005 (minimum patents), ADR-006 (covariance type), ADR-007 (normalization)
 
 ---
 
@@ -19,6 +19,8 @@ patent_vectors_50d.parquet ──→ PortfolioBuilder.load_inputs() ──→ (v
 gvkey_map.parquet ──────────────────────┘
                                         │
                             PortfolioBuilder.group_by_firm() ──→ {gvkey: vectors_50d}
+                                        │
+                            PortfolioBuilder.deduplicate() ──→ filtered {gvkey: vectors_50d}
                                         │
                             PortfolioBuilder.classify_firms() ──→ tier assignments
                                         │
@@ -101,6 +103,36 @@ class PortfolioBuilder:
 
         Returns:
             Dict mapping gvkey (str) -> np.ndarray shape (n_firm_patents, 50).
+        """
+
+    def deduplicate(
+        self,
+        firm_vectors: dict[str, np.ndarray],
+        dedup_decisions_path: str | None = None,
+    ) -> tuple[dict[str, np.ndarray], list[str]]:
+        """Remove duplicate firms using the containment ≥ 0.95 rule.
+
+        Firms that are aliases, subsidiaries, or predecessor records of
+        other firms in the dataset are removed. Without this step, the
+        M&A prediction model would generate false-positive predictions
+        for already-completed acquisitions (e.g., "Alphabet should acquire
+        Waymo" when Alphabet already owns Waymo).
+
+        If dedup_decisions_path is provided, loads pre-computed decisions
+        from the CSV file. Otherwise, computes containment from the
+        patent sets in firm_vectors (slower but self-contained).
+
+        The CSV has columns: dropped, kept, dropped_size, kept_size, category.
+
+        Args:
+            firm_vectors: Dict from group_by_firm().
+            dedup_decisions_path: Path to deduplication_decisions.csv.
+                If None, computes containment on the fly.
+
+        Returns:
+            Tuple of (filtered_firm_vectors, deduped_gvkeys)
+            - filtered_firm_vectors: Dict with duplicate firms removed.
+            - deduped_gvkeys: List of gvkeys that were removed.
         """
 
     def classify_firms(
@@ -403,10 +435,12 @@ portfolio:
   min_patents: 5                    # Firms below this are excluded (ADR-005)
   single_gaussian_max: 49           # Firms with min_patents..this get K=1 (ADR-005)
   gmm_method: "bayesian"            # "bayesian" or "bic_sweep" (ADR-004)
-  k_max: 15                         # Operational default (ADR-004)
-  k_max_sweep: [10, 15, 20]         # Produce artifacts at each value for sensitivity
+  k_max: 15                         # Production locked (ADR-004, 2026-04-14)
+  k_max_reference: 10               # Convergence-floor reference artifact
+  k_max_sweep: [10, 15, 20, 25, 30] # Convergence sweep values (reproducibility)
+  dedup_decisions_path: "output/kmax_sweep/deduplication_decisions.csv"
   covariance_type: "diag"           # "diag" per ADR-006
-  normalization: "raw"              # "raw", "l2", or "zscore" (ADR-007, pending EDA)
+  normalization: "raw"              # "raw", "l2", or "zscore" (ADR-007, finalized via EDA)
   weight_pruning_threshold: 0.01    # Components below this weight are pruned
   weight_concentration_prior: 1.0   # DP γ — E[K]≈γ·log(n) (ADR-004, post-audit)
   mean_precision_prior: 1.0         # κ₀: weakly informative mean shrinkage
@@ -431,19 +465,20 @@ output_portfolios:
 
 ## Output File Inventory
 
-The pipeline produces one GMM artifact per K_max value in the sensitivity sweep (config `portfolio.k_max_sweep`). The operational default (`portfolio.k_max`) determines which artifact is the primary output; the others are for Week 3 robustness reporting.
+The pipeline produces one primary GMM artifact at the production K_max (locked: 15) and one convergence-floor reference artifact at K_max=10. Both are Branch A outputs of the pre-registered decision framework — convergence was confirmed at K=10, K=15 was selected as the production lock for mega-firm representational headroom (see ADR-004 "Production K_max Decision").
 
 | File | Description | Schema |
 |------|-------------|--------|
-| `firm_gmm_parameters_k{N}.parquet` | Per-firm GMM parameters at K_max=N | See GMMFitter.serialize() above |
+| `firm_gmm_parameters_k15.parquet` | **Primary** — per-firm GMM parameters at production K_max=15 | See GMMFitter.serialize() above |
+| `firm_gmm_parameters_k10.parquet` | Convergence-floor reference (robustness check) | Same schema |
 | `excluded_firms.csv` | Firms excluded due to insufficient patents | `gvkey, n_patents, reason` |
+| `deduplication_log.csv` | Firms removed by deduplication | `dropped, kept, dropped_size, kept_size, category` |
 
-Example with default config (`k_max_sweep: [10, 15, 20]`):
-- `output/portfolios/firm_gmm_parameters_k10.parquet`
-- `output/portfolios/firm_gmm_parameters_k15.parquet` (primary)
-- `output/portfolios/firm_gmm_parameters_k20.parquet`
+Example with default config:
+- `output/portfolios/firm_gmm_parameters_k15.parquet` (primary, production)
+- `output/portfolios/firm_gmm_parameters_k10.parquet` (convergence-floor reference)
 
-Week 3 loads all sweep artifacts to classify firm pairs as **robust** or **model-sensitive**.
+Week 3 uses the primary K=15 artifact for BC computation. The K=10 reference artifact validates that top-pair overlap exceeds 96% (expected from the convergence sweep).
 
 ---
 
@@ -455,6 +490,9 @@ Each module has a corresponding test file. Tests are written BEFORE implementati
 
 - **load_inputs**: Loads synthetic Week 1 outputs; validates shapes and join integrity; raises ValueError for orphaned patent_ids in gvkey_map
 - **group_by_firm**: Correct grouping; co-assigned patents appear in both firms' arrays; vectors match original patent vectors
+- **deduplicate (from CSV)**: Loads decisions CSV; removes exactly the listed firms; returns correct deduped_gvkeys list
+- **deduplicate (computed)**: With synthetic firms sharing >95% patents, correctly identifies and removes the smaller firm
+- **deduplicate (edge cases)**: PRIV_-prefixed firm kept when it has more patents; equal-size aliases resolved correctly
 - **classify_firms**: Correct tier assignment at each boundary (n=4 excluded, n=5 single_gaussian, n=49 single_gaussian, n=50 gmm); configurable thresholds
 - **normalize**: Raw returns input unchanged; L2 produces unit-length vectors; z-score produces mean=0 std=1 per dimension (globally); z-score uses global stats not per-firm
 - **get_summary_stats**: Correct counts, percentiles, co-assignment detection
@@ -480,16 +518,21 @@ Week 3 consumes `firm_gmm_parameters.parquet` to compute pairwise Bhattacharyya 
 
 - Each row is one firm. The `n_components` field tells Week 3 how many components to expect in the deserialized arrays.
 - `means` deserializes to shape `(n_components, 50)`, `covariances` to shape `(n_components, 50)` (diagonal), `weights` to shape `(n_components,)`.
-- Week 3 computes BC between every pair of firms' GMMs using the component-wise BC formula aggregated by mixing weights.
+- Week 3 computes BC between every pair of firms' GMMs using the component-wise BC formula aggregated by **linear** mixing weights (πᵢπⱼ, NOT √(πᵢπⱼ)). The linear formula is bounded in [0, 1]; the √-weighted variant is an unbounded upper bound. See `scripts/recompute_bc_corrected.py:bc_mixture_linear()` for the corrected implementation.
 - The `covariance_type` field allows Week 3 to select the correct BC closed-form (diagonal vs full, if full is added later).
 - Firms not in this file were excluded and should not participate in pairwise comparison.
 
-### K_max Sensitivity Requirement (ADR-004 Condition)
+### K_max Convergence (ADR-004 — Resolved)
 
-Week 2 must produce GMM fits at K_max ∈ {10, 15, 20} — not just the default K_max=15. Week 3 is contractually required to:
+The K_max convergence sweep (run 20260412T043407Z, 7,485 deduplicated firms) confirmed persistent stability at K_max=10: Spearman ρ = 0.991-0.993 and top-50 overlap = 96-100% for all adjacent transitions from K_max=10 onward. This supersedes the earlier sensitivity requirement.
 
-1. Compute BC rankings under all three K_max settings
-2. Report firm pairs as **robust** (consistent ranking across K_max) or **model-sensitive** (ranking depends on K_max)
-3. Any top-pair conclusions (e.g., "firms X and Y are most technologically similar") must be accompanied by K_max robustness classification
+Week 3 contract (updated 2026-04-14):
+1. Compute BC rankings at the production K_max=15 specification
+2. Validate against the K_max=10 convergence-floor reference artifact (expected top-50 overlap: 98%)
+3. No mandatory K_max sensitivity classification — all firm pairs can be reported without caveats
 
-This is driven by EDA findings: BC Spearman ρ ≈ 0.77-0.81 across K_max settings, with top-50 pair overlap as low as 22%. Bulk rankings are directionally stable but the tail — where M&A candidate pairs live — is materially sensitive to K_max.
+### Deduplication Requirement (New — ADR-004 Convergence Resolution)
+
+The PortfolioBuilder must apply the containment ≥ 0.95 deduplication rule BEFORE GMM fitting. This removes 464 firms (5.8%) that represent aliases, subsidiaries, or predecessor records. Without this step, the M&A prediction model would surface already-completed acquisitions as top candidates.
+
+The deduplication decision log (`deduplication_decisions.csv`) is a committed artifact that documents which firms were removed and why. It should be loaded via `PortfolioBuilder.deduplicate()` rather than recomputed each run.

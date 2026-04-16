@@ -1,7 +1,7 @@
 # ADR-004: K Selection Method for Firm GMMs
 
-**Status**: Accepted with sensitivity requirement — Week 3 conclusions must report K_max robustness  
-**Date**: 2026-04-08 (revised after Bayesian audit + EDA diagnostics)  
+**Status**: Accepted — K_max=15 production locked (2026-04-14); K=10 retained as convergence-floor reference  
+**Date**: 2026-04-08 (revised 2026-04-12 for convergence resolution; revised 2026-04-14 for production lock at K=15)  
 **Authors**: Torrin Pataki, Claude Code  
 **Reviewers**: Codex (accepted with conditions), STAT 405 methodology audit (incorporated)
 
@@ -51,9 +51,9 @@ global_mean = np.mean(patent_vectors_50d, axis=0)   # shape (50,)
 global_var = np.var(patent_vectors_50d, axis=0)      # shape (50,)
 
 # Step 2: Fit each firm with globally-calibrated priors
-def fit_firm(X_firm, K_max=10):
+def fit_firm(X_firm, K_max=15):
     bgm = BayesianGaussianMixture(
-        n_components=K_max,              # Provisional: 15 (see Sensitivity Condition)
+        n_components=K_max,              # Production default: 15 (locked 2026-04-14)
         covariance_type="diag",                           # Per ADR-006
         weight_concentration_prior_type="dirichlet_process",
         weight_concentration_prior=1.0,                   # γ — see E[K] analysis below
@@ -72,7 +72,16 @@ def fit_firm(X_firm, K_max=10):
 
 **Effective K** is determined post-fit by counting components with mixing weight > 0.01 (1%). Components below this threshold are treated as pruned — their parameters are discarded from the serialized output.
 
-**K_max = 15 (provisional).** EDA diagnostics on production data show that K=10 is binding: effective K does not plateau at K_max=10 but continues climbing to K=12-16 at K_max=20, with substantive (non-fragmenting) weights. BC ranking stability analysis shows Spearman ρ ≈ 0.77-0.81 across K_max settings — directionally stable but sensitive enough that K_max affects which specific firm pairs are surfaced as "most similar." K_max=15 is adopted as the operational default because K=10 is clearly too restrictive and K=20 is not obviously converged. **K_max is a provisional research parameter, not a settled constant.** See Sensitivity Condition below.
+**K_max = 15 (production locked, 2026-04-14).** A full-scale convergence sweep across K_max ∈ {10, 15, 20, 25, 30} with corrected data (7,485 deduplicated firms, linear-weighted BC formula) confirmed persistent stability starting at K_max=10: Spearman ρ = 0.991-0.993 and top-50 pair overlap = 96-100% for every adjacent transition from K_max=10 onward. The pre-registered convergence rule is satisfied. The team selected K_max=15 over K_max=10 as the production lock (see Production K_max Decision below); K_max=10 is retained as the convergence-floor reference artifact.
+
+### Production K_max Decision (2026-04-14)
+
+The convergence sweep proves K_max=10 is sufficient for stable BC rankings. The team nonetheless locks K_max=15 as the production default, for two reasons:
+
+1. **Mega-firm K-ceiling.** All five deep-dive mega-firms (IBM, Intel, Qualcomm, Google/Alphabet, Cisco) saturate at the effective K=10 ceiling — their portfolios genuinely span more than 10 technology areas. K_max=10 truncates their representation; K_max=15 gives them room to express finer structure.
+2. **K=15 is also converged.** The K15→K20 transition passes every threshold (Spearman ρ=0.9925, top-50 overlap=100%), so adopting K=15 does not move the analysis off the convergence plateau. It is a free upgrade in expressiveness for large firms with no downside for small/mid firms (whose Dirichlet process priors prune unused components anyway).
+
+K_max=10 is retained as a convergence-floor reference artifact (`firm_gmm_parameters_k10.parquet`) for robustness checks. The team will not advertise K=10 and K=15 as co-equal — primary analysis uses K=15.
 
 ### Prior Hyperparameter Justification
 
@@ -168,35 +177,48 @@ If the EDA reveals that Bayesian GMM produces unreliable K estimates, we fall ba
 | **MCMC (Stan/NUTS)** | Stan cannot sample discrete latent variables (cluster assignments). HMC gets trapped in one of K! equivalent posterior modes. Explicitly not recommended for mixture models per the methodology audit. |
 | **MCMC (Gibbs)** | Correct approach for mixture models, but 10-30x slower than VI. Reserved for validation subsample, not production. |
 
-## Sensitivity Condition
+## Convergence Resolution (2026-04-12)
 
-**K_max sensitivity is elevated from a tuning detail to a reported methodological condition.**
+The original sensitivity condition (based on 99-firm pilot data showing ρ ≈ 0.80 and top-50 overlap as low as 22%) has been **superseded** by the full-scale convergence sweep. The pilot sensitivity was caused by two compounding bugs, not genuine model sensitivity:
 
-BC ranking stability analysis on 99 pilot firms (4,851 pairs) revealed:
+1. **464 duplicate firms** in v3 data (aliases, subsidiaries, predecessor records with near-identical patent sets) dominated the top-50 at low K_max with artificial BC ≈ 1.0 values.
+2. **Unbounded BC formula** using √(πᵢπⱼ) weighting inflated similarity scores up to 5.39 at high K_max, displacing the duplicates entirely. The corrected formula uses linear πᵢπⱼ weighting, bounded in [0, 1].
 
-| Comparison | Spearman ρ | Top-50 overlap | Top-5 NN overlap |
-|:----------:|:----------:|:--------------:|:----------------:|
-| K=10 vs K=15 | 0.807 | 48% | 62% |
-| K=10 vs K=20 | 0.774 | 22% | 53% |
-| K=15 vs K=20 | 0.792 | 36% | 64% |
+After correction, full-scale results (7,485 deduplicated firms, ~28M pairs per K_max):
 
-Bulk rankings are moderately stable (ρ ≈ 0.80), but the top tail — the only part that matters for candidate-pair discovery — is materially unstable. This means K_max affects which specific firm pairs would be flagged as M&A candidates.
+| Transition | Spearman ρ | Top-50 overlap |
+|:----------:|:----------:|:--------------:|
+| K10→K15 | 0.9912 | 98% |
+| K15→K20 | 0.9925 | 100% |
+| K20→K25 | 0.9917 | 98% |
+| K25→K30 | 0.9930 | 96% |
+| K10→K30 | 0.9833 | 96% |
 
-**Week 3 contract requirement**: Any BC-based findings must be accompanied by K_max robustness checks. For the production run:
-1. Fit GMMs at K_max ∈ {10, 15, 20}
-2. Compute BC rankings under each setting
-3. Report firm pairs as either **robust** (appear consistently across K_max settings) or **model-sensitive** (ranking depends on K_max)
+**The persistent stability rule is satisfied at K_max=10.** K_max sensitivity is no longer a reported methodological condition — convergence means the downstream M&A candidate set is robust to this modeling choice.
 
-This is a methodological limitation, not a model failure. The diagonal GMM with Bayesian K selection is the best tractable approximation for 15K firms in 50D, but downstream conclusions about specific firm-pair similarity must acknowledge sensitivity to K_max.
+**Week 3 contract (updated)**: A single primary BC specification at the production K_max=15 (locked 2026-04-14). The K_max=10 artifact is the convergence-floor reference and serves as the robustness check. No mandatory K_max sensitivity classification — all firm pairs can be reported without K_max caveats.
+
+**Deduplication requirement (new)**: The 464-firm deduplication (containment ≥ 0.95 rule) is now a required preprocessing step in the PortfolioBuilder. Without it, the top-pair rankings are corrupted by duplicate firms representing already-completed acquisitions. See `output/kmax_sweep/deduplication_decisions.csv` for the decision log.
+
+### Evidence trail
+- Diagnostic findings: `docs/epics/week2_firm_portfolios/kmax_diagnostic_findings.md`
+- Corrected artifacts: `s3://ubc-torrin/firm-pair-merger/week2/kmax_sweep/runs/20260412T043407Z-dedup-linear/`
+- Deduplication script: `scripts/duplicate_firm_unified_rule.py`
+- Corrected BC script: `scripts/recompute_bc_corrected.py`
+- Analysis notebook: `notebooks/03_kmax_convergence_analysis.ipynb`
+
+### Historical note (preserved for audit)
+The original pilot sensitivity analysis (99 firms, ρ ≈ 0.80, top-50 = 22%) was conducted BEFORE the data quality issues were discovered. Those numbers are no longer representative of the corrected methodology. The pilot did correctly identify that K_max sensitivity was a real concern worth investigating at scale — the full-scale sweep and subsequent diagnostic sequence validated the concern and resolved it.
 
 ## Consequences
 
-- Each firm gets a single Bayesian GMM fit with K_max=15 (provisional). Effective K is determined by weight thresholding.
+- Each firm gets a single Bayesian GMM fit with K_max=15 (production locked 2026-04-14; convergence proven from K_max=10). Effective K is determined by weight thresholding.
 - Components with weight < 0.01 are discarded from serialized output (not stored in `firm_gmm_parameters.parquet`).
 - The Dirichlet process prior (γ=1.0) provides E[K] ≈ log(n) scaling — larger firms naturally express more components.
 - Prior hyperparameters are computed from the global pooled dataset (global empirical Bayes), not per-firm.
 - ELBO (variational lower bound on log-evidence) is stored per firm for validation. sklearn's `BayesianGaussianMixture` does not provide BIC; ELBO serves the same purpose as a model evidence proxy.
 - The Bayesian workflow (prior predictive simulation, PPC, sensitivity analysis) is a required part of the EDA, not optional.
 - The presentation's "Other?" option (slide 7, red text) is addressed: Bayesian GMM IS the "other" — it subsumes the BIC approach by providing automatic model selection.
-- **K_max sensitivity is a reported methodological condition.** Week 3 must report robustness of BC rankings across K_max ∈ {10, 15, 20}. Firm pairs whose rankings are unstable across K_max settings are flagged as model-sensitive.
-- **Revisit trigger**: If Week 3 BC validation shows that K_max sensitivity undermines the M&A prediction task (e.g., known merger pairs are not consistently ranked as similar), K_max selection must be revisited — potentially with per-firm BIC-based K selection for large firms.
+- **Deduplication is a required preprocessing step.** The PortfolioBuilder must apply the containment ≥ 0.95 rule before GMM fitting to remove 464 duplicate firms (aliases, subsidiaries, predecessor records).
+- **K_max convergence is confirmed.** Week 3 uses a single primary BC specification at the production K_max=15. The K_max=10 artifact is retained as the convergence-floor reference for robustness checks but is not required for reporting.
+- **BC formula uses linear weights πᵢπⱼ** (not √(πᵢπⱼ)). This is bounded in [0, 1] and aligns with the methodology description of "aggregate using GMM weights."

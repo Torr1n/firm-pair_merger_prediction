@@ -1,9 +1,10 @@
 # K_max Sweep Diagnostic Findings
 
-**Status**: HALT — awaiting BC recomputation + misspecification tests  
-**Date**: 2026-04-09 (initial), updated 2026-04-11  
-**Run**: 20260409T170706Z (c5.4xlarge, 2.84 hours, all 7,949 non-excluded firms)  
-**Author**: Claude Code (Week 2 interpretation instance)
+**Status**: RESOLVED — corrected recomputation confirms CONVERGED at K_max=10 (Branch A)  
+**Date**: 2026-04-09 (initial), updated 2026-04-12 (resolution)  
+**Original run**: 20260409T170706Z (c5.4xlarge, 2.84 hours, all 7,949 non-excluded firms)  
+**Corrected run**: 20260412T043407Z-dedup-linear (c5.4xlarge, 7,485 deduplicated firms)  
+**Author**: Claude Code (Week 2 interpretation + implementation instances)
 
 ---
 
