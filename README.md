@@ -4,7 +4,7 @@ Can firms' patent portfolios be used as a predictor of M&A pairs in the Technolo
 
 ## Quickstart for Teammates (Week 2 Handover)
 
-You have been handed a validated patent-portfolio distance matrix over **7,485 firms** in the technology and biotech sectors, ready for economic hypothesis testing. You should have received an artifact bundle from Torrin (email attachment or file-share link, ~860 MB).
+You have been handed a validated patent-portfolio distance matrix over **7,485 firms** in the technology and biotech sectors, ready for exploratory regressions and early hypothesis testing. Several methodology and engineering items remain open as a staged 1–4 week follow-up (see "Open Items" below); none are blockers for starting your analysis, but they shape what you can claim in the paper. You should have received an artifact bundle from Torrin (file-share link; ~845 MB is too large for most email attachments).
 
 ### 1. Clone the repo and install dependencies
 
@@ -39,9 +39,20 @@ After extracting Torrin's bundle (8 files plus `SHA256SUMS.txt`), place them as 
 
 ### 3. Verify transfer integrity
 
+On macOS / Linux / WSL:
 ```bash
 cd /path/to/extracted/bundle
 sha256sum -c SHA256SUMS.txt
+```
+
+On Windows PowerShell (no WSL):
+```powershell
+cd C:\path\to\extracted\bundle
+Get-FileHash -Algorithm SHA256 *.parquet,*.npz,*.csv,*.ipynb |
+    ForEach-Object { "{0}  {1}" -f $_.Hash.ToLower(), (Split-Path -Leaf $_.Path) } |
+    Out-File -Encoding ascii my_hashes.txt
+# Then visually compare my_hashes.txt to SHA256SUMS.txt, or:
+Compare-Object (Get-Content SHA256SUMS.txt) (Get-Content my_hashes.txt)
 ```
 
 ### 4. Run Notebook 04 (main walkthrough)

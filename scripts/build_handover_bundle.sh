@@ -47,10 +47,41 @@ else
     echo "WARN: notebooks/04_pipeline_output_overview.ipynb not found — bundle will ship without walkthrough" >&2
 fi
 
-# --- Integrity checksums ---
+# --- MANIFEST.txt (human-readable versioning anchor) ---
+GIT_SHA=$(git rev-parse --short=12 HEAD 2>/dev/null || echo "unknown")
+BUILT_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+cat > "$STAGE/MANIFEST.txt" <<EOF
+Bundle:  Week 2 Handover — Firm Portfolio Distance Matrix
+Built:   $BUILT_AT (UTC)
+Git SHA: $GIT_SHA
+Source:  s3://ubc-torrin/firm-pair-merger/week2/kmax_sweep/runs/20260412T043407Z-dedup-linear/
+Project: firm-pair_merger_prediction (K_max=15 production, ADR-004 2026-04-14)
+
+Contents:
+  firm_gmm_parameters_k15.parquet    - Per-firm Bayesian GMM (K_max=15), PRIMARY
+  bc_matrix_all_k15_dedup_linear.npz - Pairwise BC matrix (7485 x 7485), PRIMARY
+  firm_gmm_parameters_k10.parquet    - Convergence-floor reference (K_max=10)
+  bc_matrix_all_k10_dedup_linear.npz - Reference BC matrix at K=10
+  deduplication_decisions.csv        - 464 firms removed (aliases, subs, predecessors)
+  excluded_firms.csv                 - Firms removed for <5 patents
+  coassignment_audit.parquet         - Top-100 BC pair shared-patent audit
+  04_pipeline_output_overview.ipynb  - Teammate walkthrough notebook
+  MANIFEST.txt                       - This file
+  SHA256SUMS.txt                     - Integrity checksums
+
+Verification (Linux/Mac/WSL):
+  cd <bundle>
+  sha256sum -c SHA256SUMS.txt
+
+Verification (Windows PowerShell): see README "Quickstart for Teammates" section.
+EOF
+
+# --- Integrity checksums (remove stale SHA256SUMS first to ensure idempotent re-runs) ---
+rm -f "$STAGE/SHA256SUMS.txt"
 (cd "$STAGE" && sha256sum * > SHA256SUMS.txt)
 
 N_FILES=$(ls "$STAGE" | wc -l)
 TOTAL_MB=$(du -sm "$STAGE" | cut -f1)
 echo "Bundle staged at $STAGE with $N_FILES files (${TOTAL_MB} MB)"
+echo "MANIFEST: git SHA $GIT_SHA, built $BUILT_AT"
 echo "Verify integrity: cd $STAGE && sha256sum -c SHA256SUMS.txt"

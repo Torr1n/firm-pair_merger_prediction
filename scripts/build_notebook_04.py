@@ -406,7 +406,7 @@ def build() -> nbf.NotebookNode:
     ))
 
     cells.append(code(
-        "# Plot 2: BC vs firm-size-product (500-pair random sample for readability)\n"
+        "# Plot 2: BC vs firm-size-product (5,000-pair random sample for readability)\n"
         "rng = np.random.default_rng(42)\n"
         "sample_size = 5000\n"
         "sample_i = rng.integers(0, len(gvkeys), size=sample_size)\n"

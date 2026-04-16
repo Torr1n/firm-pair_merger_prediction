@@ -114,17 +114,20 @@ def main() -> None:
 
 ## Interpretation
 
-Of the top-{TOP_K} BC pairs, **{n_ge10} share more than 10%** of their patents (min-normalized) \
-and **{n_ge25} share more than 25%**. Median shared-patent count is **{median_shared}**; mean \
-Jaccard similarity is **{mean_jaccard:.4f}**. This indicates that BC is partially reflecting \
-existing co-assignment structure (joint ventures, subsidiaries missed by the containment-based \
-dedup, or long-running technical collaborations across firm boundaries).
+Of the top-{TOP_K} BC pairs, **{n_zero} share zero patents** and only **{n_ge10} exceed 10% \
+overlap** (min-normalized); **{n_ge25}** exceed 25%. Median shared-patent count is \
+**{median_shared}**; mean Jaccard similarity is **{mean_jaccard:.4f}** — essentially zero. BC is \
+substantially independent of co-assignment structure for the top-tier pairs; the signal is \
+genuinely distributional, not a rediscovery of existing joint ventures, subsidiary relationships, \
+or long-running collaborations. Any pair in the "exceed 10% overlap" bucket is likely a \
+parent-subsidiary record that fell just below the 0.95 containment dedup threshold and should be \
+inspected individually.
 
-Downstream M&A prediction regressions should consider including a shared-patent count (`n_shared`) \
-or Jaccard similarity (`jaccard`) as a control covariate. This isolates the pure \
-technological-similarity signal from already-existing structural ties — otherwise top-BC \
-coefficients may be capturing a "firms that already collaborate" effect rather than a \
-"firms whose technologies complement each other" effect.
+**Recommendation for downstream regressions.** Include a shared-patent count (`n_shared`) or \
+Jaccard similarity (`jaccard`) from the audit parquet as a control covariate. The effect size \
+should be small given the audit numbers, but it is defensive against the outliers and against \
+the long tail of <top-{TOP_K} pairs we did not audit. This isolates the pure \
+technological-similarity signal from already-existing structural ties.
 
 ## Full Results
 

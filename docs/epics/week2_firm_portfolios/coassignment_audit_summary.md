@@ -17,9 +17,9 @@
 
 ## Interpretation
 
-Of the top-100 BC pairs, **2 share more than 10%** of their patents (min-normalized) and **2 share more than 25%**. Median shared-patent count is **0**; mean Jaccard similarity is **0.0135**. This indicates that BC is partially reflecting existing co-assignment structure (joint ventures, subsidiaries missed by the containment-based dedup, or long-running technical collaborations across firm boundaries).
+**The dedup rule worked well.** Of the top-100 BC pairs, **98 share zero patents** and only **2 exceed 10% overlap** (both clear parent-subsidiary dedup misses just below the 0.95 containment threshold: rank 37 `060888` + `PRIV_OBLONGINDUSTRIES` at 94% overlap, and rank 20 `063083` + `PRIV_ENDOLOGIX` at 75%). Mean Jaccard similarity is **0.0135** — essentially zero. BC is substantially independent of co-assignment structure for the top-tier pairs; the signal is genuinely distributional, not a rediscovery of existing joint ventures.
 
-Downstream M&A prediction regressions should consider including a shared-patent count (`n_shared`) or Jaccard similarity (`jaccard`) as a control covariate. This isolates the pure technological-similarity signal from already-existing structural ties — otherwise top-BC coefficients may be capturing a "firms that already collaborate" effect rather than a "firms whose technologies complement each other" effect.
+**Recommendation for downstream regressions.** Include a shared-patent count (`n_shared`) or Jaccard similarity (`jaccard`) from the audit parquet as a control covariate. The effect size should be small given the audit numbers, but it is defensive against the 2 outliers and against the long tail of <top-100 pairs we did not audit. This isolates the pure technological-similarity signal from already-existing structural ties.
 
 ## Full Results
 
