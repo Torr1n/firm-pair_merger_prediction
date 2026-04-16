@@ -2,6 +2,94 @@
 
 Can firms' patent portfolios be used as a predictor of M&A pairs in the Technology Sector?
 
+## Quickstart for Teammates (Week 2 Handover)
+
+You have been handed a validated patent-portfolio distance matrix over **7,485 firms** in the technology and biotech sectors, ready for economic hypothesis testing. You should have received an artifact bundle from Torrin (email attachment or file-share link, ~860 MB).
+
+### 1. Clone the repo and install dependencies
+
+```bash
+git clone <repo-url>
+cd firm-pair_merger_prediction
+python3 -m venv venv
+source venv/bin/activate     # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### 2. Place the artifact bundle files
+
+After extracting Torrin's bundle (8 files plus `SHA256SUMS.txt`), place them as follows, from the repo root:
+
+**Into `output/kmax_sweep/corrected/output/kmax_sweep/`** (the nested path is intentional — it's the S3-sync layout):
+
+- `firm_gmm_parameters_k15.parquet`
+- `bc_matrix_all_k15_dedup_linear.npz`
+- `firm_gmm_parameters_k10.parquet`
+- `bc_matrix_all_k10_dedup_linear.npz`
+
+**Into `output/kmax_sweep/`:**
+
+- `deduplication_decisions.csv`
+- `excluded_firms.csv`
+- `coassignment_audit.parquet`
+
+**Into `notebooks/`** (if not already in your clone):
+
+- `04_pipeline_output_overview.ipynb`
+
+### 3. Verify transfer integrity
+
+```bash
+cd /path/to/extracted/bundle
+sha256sum -c SHA256SUMS.txt
+```
+
+### 4. Run Notebook 04 (main walkthrough)
+
+```bash
+jupyter notebook notebooks/04_pipeline_output_overview.ipynb
+```
+
+Plan on 4-6 hours to work through it. The notebook covers: loading the artifacts, a worked two-firm BC example (with reproducibility assertion), finding top-k partners for any firm, distributional sanity plots, the co-assignment caveat (critical for regression design), and the caveats/roadmap table.
+
+### Key Artifacts
+
+| File | Description |
+|---|---|
+| `firm_gmm_parameters_k15.parquet` | **Primary** — per-firm Bayesian GMM at K_max=15 (production lock) |
+| `bc_matrix_all_k15_dedup_linear.npz` | **Primary** — pairwise Bhattacharyya Coefficient matrix at K=15 |
+| `firm_gmm_parameters_k10.parquet` | Convergence-floor reference (K_max=10) for robustness checks |
+| `bc_matrix_all_k10_dedup_linear.npz` | Reference BC matrix at K=10 |
+| `deduplication_decisions.csv` | Audit trail — 464 aliases/subsidiaries/predecessors removed |
+| `excluded_firms.csv` | Firms excluded for <5 patents |
+| `coassignment_audit.parquet` | Top-100 BC pair shared-patents audit (see Section 6 of Notebook 04) |
+
+### Methodology at a Glance
+
+- **`notebooks/03_kmax_convergence_analysis.ipynb`** — K_max convergence story (Spearman ρ=0.991-0.993, top-50 overlap 96-100%)
+- **`docs/adr/adr_004_k_selection_method.md`** — K_max=15 production decision (locked 2026-04-14)
+- **`docs/adr/adr_005_..._prior_global_empirical.md`**, **`adr_006_diagonal_covariance.md`**, **`adr_007_normalization.md`** — other methodology choices
+- **`docs/epics/week2_firm_portfolios/kmax_sweep_executive_summary.md`** — decision narrative
+- **`docs/epics/week2_firm_portfolios/coassignment_audit_summary.md`** — aggregate co-assignment stats
+
+### BC Formula Correctness Note
+
+The BC formula uses **linear** mixing weights πᵢπⱼ (bounded in [0, 1]). An earlier iteration used `√(πᵢπⱼ)` which is mathematically an upper bound and can exceed 1.0 (observed up to 5.39), causing the original K_max=15→20 top-tail ranking instability we caught on 2026-04-12. The shipped matrix uses the corrected formula; Notebook 04 Section 3 asserts matrix-vs-formula agreement to float64 tolerance as a reproducibility anchor.
+
+### Open Items (staged delivery, 1-4 weeks from 2026-04-15)
+
+See Section 7 of Notebook 04 for the full caveats table. Headline items still in flight:
+
+- **Gaussian adequacy audit** (Week 1-2) — checking whether the Bayesian GMM's Gaussian component assumption holds empirically on UMAP-reduced patent vectors
+- **Pruning-threshold audit** (Week 1-2) — sensitivity of effective K to the DP weight-threshold choice
+- **BC spec (Codex review in progress)** (Week 1) — 5 revisions pending before the spec is approved for implementation
+- **BC and PortfolioBuilder module TDD** (Week 2-3) — extract production logic from `scripts/*.py` into tested modules under `src/comparison/` and `src/portfolio/`
+- **Directional complementarity v2 dataset** (Week 2-4) — ADR-008 → spec → implementation for the asymmetric "gap-filling" metric
+
+### Asking questions
+
+Contact Torrin for any issues. For methodology questions, reference the ADRs. For open-item timelines or early-delivery requests, ping Torrin directly — order-of-operations may shift if something is blocking your regressions.
+
 ## Research Motivation
 
 M&A is a driver of growth that allows larger firms with low R&D to acquire new technology. Building on Bena & Li (2014), this project redefines the "technological overlap" variable with one that has more economic interpretation. Instead of a static similarity score, we measure overlap in the probability distributions of entire patent portfolios — moving from "how similar are two patent portfolios?" to "in what way are patent portfolios interacting in the technology space?"
