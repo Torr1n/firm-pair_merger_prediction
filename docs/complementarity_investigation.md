@@ -7,6 +7,17 @@
 
 ---
 
+## Formula Evolution Summary
+
+| Attempt | Formula | Symmetric? | Usable? | Why not |
+| --- | --- | --- | --- | --- |
+| 1 | `Σ_k (1−p_{A,k}) · p_{B,k}` on per-firm GMM weights | Yes — always `= 1−BC` | No | Algebraic identity; normalised weights make it symmetric by construction |
+| 2 | `1 − Σ_i Σ_j p_{A,i}·p_{B,j}·exp(−KL(B_j‖A_i))` on per-firm GMMs | No | No | 99.96% of pairs saturate at 1.0; 50D KL divergence explodes across non-overlapping firm clusters |
+| 3 | `Σ_k (1−p_{A,k}) · p_{B,k}` on global K-means weights | Yes — always `= 1−BC` | No | Same algebraic identity applies regardless of clustering approach |
+| **Final** | **`Σ_k max(0, p_market_k − p_{A,k}) · p_{B,k}` on global K-means weights** | **No** | **Yes** | **Market-relative gap breaks the normalisation constraint → genuine asymmetry** |
+
+---
+
 ## Background
 
 The BC score already measures symmetric technological overlap between two firms. The goal of this investigation was to compute a *directional* complementarity score — Comp(A→B) ≠ Comp(B→A) — that captures whether firm B fills gaps in firm A's patent portfolio. This is motivated by capability-acquisition M&A theory: acquirers often buy targets not because they overlap, but because the target covers technology areas the acquirer lacks.
