@@ -34,6 +34,9 @@ notebooks/*.png
 # Exception: Notebook 03 convergence visualizations are Week 2 deliverables
 # (teammates use them in slides; regeneratable via scripts/regenerate_notebook_pngs.py)
 !notebooks/03_*.png
+# Exception: Notebook 05 synthetic-merger ΔBC plot is a case-study deliverable
+# (Arthur uses it for the research presentation; regenerate via build_notebook_05.py + nbconvert)
+!notebooks/05_*.png
 
 # OS
 .DS_Store
